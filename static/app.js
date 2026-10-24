@@ -98,8 +98,8 @@ const opts = (list, sel) => list.map(([v, t, dis]) => `<option value="${esc(v)}"
 
 function hash(str) { let h = 2166136261; for (const c of String(str)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
 function orb(id, { size = 48, level = "intern", cls = "" } = {}) {
-  const h = hash(id), hue = [168, 188, 206, 226, 250, 148][h % 6], gid = "o" + h, on = level !== "intern";
-  return `<svg class="orb ${cls}" viewBox="-20 -20 40 40" width="${size}" height="${size}" aria-hidden="true"><defs><radialGradient id="${gid}" cx="36%" cy="30%" r="80%"><stop offset="0" stop-color="hsl(${hue} 100% 93%)"/><stop offset=".42" stop-color="hsl(${hue} 88% 62%)"/><stop offset="1" stop-color="hsl(${(hue + 50) % 360} 78% 24%)"/></radialGradient></defs><circle class="core" r="10.5" fill="url(#${gid})"/><ellipse class="ring" rx="18" ry="6.6" fill="none" stroke="${on ? "#4ff0c8" : "#8fb4ff"}" stroke-opacity="${on ? 0.95 : 0.65}" stroke-width="1.3" ${on ? "" : 'stroke-dasharray="3 3"'} transform="rotate(${-28 + (h % 5) * 6})"/></svg>`;
+  const colors = ["#74bbff", "#9baeff", "#65d5df", "#68a5ed"], color = colors[hash(id) % colors.length];
+  return `<svg class="orb ${cls}" viewBox="0 0 48 48" width="${size}" height="${size}" aria-hidden="true"><rect x="2" y="2" width="44" height="44" rx="16" fill="${color}" opacity=".12"/><rect x="12" y="15" width="24" height="21" rx="8" fill="${color}"/><path d="M24 11v4M9 23v6m30-6v6" stroke="${color}" stroke-width="3" stroke-linecap="round"/><circle cx="20" cy="24" r="2" fill="white"/><circle cx="28" cy="24" r="2" fill="white"/><path d="M21 30h6" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>`;
 }
 
 let toastTimer;
@@ -111,11 +111,14 @@ function toast(msg, error = false) {
 async function act(fn, el) {
   if (busy) return;
   busy = true;
+  $("#view").setAttribute("aria-busy", "true");
+  const original = el?.innerHTML;
+  if (el?.tagName === "BUTTON") { el.textContent = "Working…"; el.setAttribute("aria-busy", "true"); }
   const btns = $$("button", el?.closest("form") || el?.parentElement || document).filter(b => !b.disabled);
   btns.forEach(b => { b.disabled = true; });
   try { const msg = await fn(); await load(); render(); if (msg) toast(msg); }
   catch (e) { await load().catch(() => {}); render(); toast(e.message, true); }
-  finally { busy = false; btns.forEach(b => { if (b.isConnected) b.disabled = false; }); }
+  finally { busy = false; $("#view").removeAttribute("aria-busy"); if (el?.isConnected && original !== undefined) { el.innerHTML = original; el.removeAttribute("aria-busy"); } btns.forEach(b => { if (b.isConnected) b.disabled = false; }); }
 }
 
 /* ---------- routing ---------- */
@@ -124,7 +127,7 @@ function route() {
   const alias = { arcade: "agents", hire: "create", queue: "inbox", scores: "leaderboard", shop: "library" };
   return { name: alias[raw] || raw || "work", id };
 }
-const TITLES = { work: "Team work", agents: "Agents", create: "Create an agent", inbox: "Inbox", leaderboard: "Leaderboard", library: "Library" };
+const TITLES = { work: "Home", agents: "Agents", create: "Create an agent", inbox: "Inbox", leaderboard: "Leaderboard", library: "Library" };
 function render() {
   const r = route(), section = r.name === "agent" ? "agents" : r.name;
   $$("#menu a").forEach(a => { if (a.dataset.route === section) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
@@ -160,27 +163,28 @@ function workflowAgents(w) {
   return S.agents.filter(a => a.status === "active" && a.department_id === w.department_id && canManage(a) && w.required_tools.every(t => capsOf(a).some(c => (c.tools || []).includes(t))));
 }
 function workScreen() {
-  const items = [...(S["work-queue"] || [])].sort((a,b) => Number(a.workflow === "support") - Number(b.workflow === "support")), finished = items.filter(w => w.finished_at);
-  const accepted = items.filter(w => w.status === "accepted"), corrected = items.filter(w => w.status === "needs_correction");
-  const seconds = finished.length ? Math.round(finished.reduce((n,w) => n + (Date.parse(w.finished_at)-Date.parse(w.assigned_at))/1000, 0)/finished.length) : null;
-  return `<div class="screen"><div class="head"><div><h1>Give your team a mission.</h1><p class="muted">One job. Multiple deliverables. A named owner and a reviewable outcome.</p></div><a class="btn" href="#/library">Reuse a team template</a></div>
-    <div class="queue-stats"><div class="panel"><b>${items.length}</b><span>Jobs received</span></div><div class="panel"><b>${items.filter(w=>w.status === "awaiting_approval").length}</b><span>Waiting for a decision</span></div><div class="panel"><b>${accepted.length} / ${accepted.length + corrected.length}</b><span>Outcomes accepted · ${corrected.length} need correction</span></div><div class="panel"><b>${seconds === null ? "—" : seconds + "s"}</b><span>Avg. execution turnaround · includes failed jobs and action review</span></div></div>
-    <section class="panel stack"><div><h2>Start with a business outcome</h2><p class="muted">These examples use fictional inputs. Demo mode creates labeled templates; select a live model when assigning for original work. All outputs stay in the local workspace.</p></div><div class="mission-templates">${["launch","analysis","brief"].map(k=>`<button class="choice" data-act="load-job" data-workflow="${k}"><span class="body"><span class="title">${esc(JOBS[k].name)}</span><span class="sub">${esc(JOBS[k].deliverables)}</span></span>${icon("plus")}</button>`).join("")}</div><details><summary>Other examples</summary><button class="btn small" data-act="load-job" data-workflow="support">Load support tickets</button></details></section>
-    <details class="panel plain"><summary>Create your own job</summary><form class="stack" data-form="create-job"><label class="field">Workflow<select name="workflow">${opts(["launch","analysis","brief"].map(k=>[k,JOBS[k].name]),"launch")}</select></label><label class="field">Team<select name="department_id">${opts(S.departments.map(d=>[d.id,d.name]),defaultDept())}</select></label><label class="field">Job title<input name="title" required maxlength="100" placeholder="Prepare our investor update"></label><label class="field">Brief, source data and company rules<textarea name="task" required maxlength="4000" placeholder="Include the inputs, required outputs and constraints. For analysis, paste CSV data."></textarea></label><button class="btn primary">Add to work queue</button></form></details>
-    <div class="head"><h2>Work queue</h2><a class="btn small" href="#/inbox">Review actions in Inbox</a></div>
-    ${!items.length ? emptyState("Your next mission starts here", "Choose a scenario above, or add a job with your own inputs and company rules.") : items.map(w => {
+  const items = [...(S["work-queue"] || [])];
+  const starters = [["make-slideshow","slides","Slide maker","Notes → slides","peach"],["write-document","document","Writer","Ideas → a polished brief","lavender"],["analyze-data","chart","Data analyst","Numbers → insights","mint"],["research-web","search","Researcher","Links → key takeaways","blue"]];
+  const pending = S.approvals.filter(a => a.status === "pending").length;
+  return `<div class="screen home-screen"><section class="home-hero"><div class="hero-copy"><span class="eyebrow"><span class="tiny-star" aria-hidden="true">✧</span> YOUR AI WORKSPACE</span><h1>Big ideas.<br><span>Less busywork.</span></h1><p>Create an agent. Give your team a head start.</p><a class="btn primary" href="#/create">Create an agent ${icon("arrow","sm")}</a></div><div class="agent-network" role="img" aria-label="Choose skills, create an agent, review its work"><svg viewBox="0 0 720 230" aria-hidden="true"><defs><linearGradient id="network-line"><stop stop-color="#2763a7" stop-opacity=".2"/><stop offset=".5" stop-color="#8fdfff"/><stop offset="1" stop-color="#2763a7" stop-opacity=".2"/></linearGradient><linearGradient id="network-core" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#225ba6"/><stop offset=".5" stop-color="#102947"/><stop offset="1" stop-color="#071421"/></linearGradient><radialGradient id="network-aura"><stop stop-color="#2389ff" stop-opacity=".3"/><stop offset="1" stop-color="#2389ff" stop-opacity="0"/></radialGradient></defs><ellipse cx="360" cy="110" rx="225" ry="115" fill="url(#network-aura)"/><g fill="none" stroke="url(#network-line)" stroke-width="1"><path d="M130 60h110q35 0 35 35v15h36"/><path d="M130 160h110q35 0 35-35v-15"/><path d="M409 110h36q0-50 35-50h110"/><path d="M445 110q0 50 35 50h110"/></g><g class="network-pulses" fill="#8edaff"><circle cx="220" cy="60" r="2.5"/><circle cx="275" cy="125" r="2.5"/><circle cx="500" cy="60" r="2.5"/><circle cx="555" cy="160" r="2.5"/></g><g fill="#0c1c2b" stroke="#284967"><rect x="84" y="35" width="48" height="48" rx="12"/><rect x="84" y="137" width="48" height="48" rx="12"/><rect x="588" y="35" width="48" height="48" rx="12"/><rect x="588" y="137" width="48" height="48" rx="12"/></g><g fill="none" stroke="#89c6f3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M98 47h20v17H98zm5 22h10m-5-5v5M101 150h14v23h-14zm4 7h6m-6 5h6M601 53l7 7 13-13m-20 114 7 7 13-13"/></g><rect x="310" y="60" width="100" height="100" rx="24" fill="url(#network-core)" stroke="#76b9f1" stroke-opacity=".6"/><rect x="318" y="68" width="84" height="84" rx="19" fill="none" stroke="#79beff" stroke-opacity=".14"/><g fill="none" stroke="#cbeaff" stroke-width="2"><path d="M346 96h28v28h-28zm8-8v8m12-8v8m-12 28v8m12-8v8m-28-28h8m-8 12h8m28-12h8m-8 12h8"/></g></svg><div class="network-labels"><span>01 <b>Choose skills</b></span><span>02 <b>Create agent</b></span><span>03 <b>Review work</b></span></div></div></section>
+
+    ${pending ? `<a class="banner" href="#/inbox">${icon("inbox")}<b>${pending} action${pending === 1 ? "" : "s"} to review</b><span class="arrow">Review ${icon("arrow")}</span></a>` : ""}
+    <section class="stack"><div class="head"><h2>Start with a skill</h2><a class="text-link" href="#/create">Build your own ${icon("arrow","sm")}</a></div><div class="starter-grid">${starters.map(([cid,ico,name,sub,tone]) => { const cap = S.capabilities.find(c => c.id === cid) || S.capabilities.find(c => (c.icon || "") === ico); return cap ? `<button class="starter-card ${tone}" data-act="use-cap" data-id="${esc(cap.id)}"><span class="skill-art">${icon(ico)}</span><strong>${name}</strong><span>${sub}</span><span class="starter-arrow" aria-hidden="true">↗</span></button>` : ""; }).join("")}</div></section>
+    ${S.agents.length ? `<section class="stack"><div class="head"><h2>Your agents <span class="count">${S.agents.length}</span></h2><a class="text-link" href="#/agents">View all ${icon("arrow","sm")}</a></div><div class="grid">${S.agents.slice(0,3).map(agentCard).join("")}</div></section>` : ""}
+    <details class="panel plain jobs-section" ${items.length ? "open" : ""}><summary>Team jobs ${items.length ? `(${items.length})` : "· optional"}</summary><div class="stack"><div class="mission-templates">${["launch","analysis","brief"].map(k => `<button class="choice" data-act="load-job" data-workflow="${k}">${icon(k === "analysis" ? "chart" : k === "brief" ? "document" : "slides")}<span>${esc(JOBS[k].name)}</span>${icon("plus","sm")}</button>`).join("")}</div><span class="faint">Sample jobs · fictional data</span><details><summary>Add your own job</summary><form class="stack" data-form="create-job"><label class="field">Job type<select name="workflow">${opts(["launch","analysis","brief"].map(k=>[k,JOBS[k].name]),"launch")}</select></label><label class="field">Team<select name="department_id">${opts(S.departments.map(d=>[d.id,d.name]),defaultDept())}</select></label><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">Task & source data<textarea name="task" required maxlength="4000"></textarea></label><button class="btn primary">Add job</button></form></details>
+    ${!items.length ? `<p class="muted">Choose a sample above to try team jobs.</p>` : items.map(w => {
       const a = agentById(w.agent_id), canReview = a && canManage(a), id = esc(w.id), job = JOBS[w.workflow], eligible = workflowAgents(w);
       const state = {unassigned:"Unassigned",accepted:"Accepted",needs_correction:"Needs correction"}[w.status];
       return `<section class="panel stack"><div class="row between"><div><span class="pill">${esc(job.name)} · ${w.sample_data ? "Fictional input":"User-provided input"}</span><h2>${esc(w.title)}</h2></div>${state ? pill(w.status === "accepted" ? "ok":"ask",state) : statusPill(w.status)}</div>
       <p class="muted">${esc(job.deliverables)} · Reviewer: ${a ? esc(userName(a.manager_id)) : "Assigned agent’s manager"}</p>
       ${w.ticket ? `<p>${esc(w.ticket.body)}</p><p class="faint">Proposed routing: ${esc(w.route_to)} · recommendation only</p>` : `<details><summary>Brief & company rules</summary><pre>${esc(w.task)}</pre></details>`}
       <p class="faint">${a ? "Owner: " + esc(a.name) : "No agent assigned"}${w.run_id ? " · " + esc(modelLabel(S.runs.find(r=>r.id === w.run_id)?.mode)) : ""}</p>
-      ${!w.run_id || ["needs_correction","failed","cancelled"].includes(w.status) ? `<div class="row"><button class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}" data-dept="${esc(w.department_id)}">Hire ${esc(job.agent.toLowerCase())}</button></div><form class="row" data-form="assign-ticket" data-id="${id}"><label class="field">Assign owner<select name="agent_id" required>${opts(eligible.map(a=>[a.id,a.name]),"")}</select></label><label class="field">Execution<select name="mode">${opts(S["model-profiles"].filter(m=>m.enabled).map(m=>[m.id,m.id === "demo" ? "Demo · fixed templates" : m.name]),"demo")}</select></label><button class="btn primary" ${eligible.length ? "":"disabled"}>${w.run_id ? "Revise & rerun" : "Assign & start"}</button>${eligible.length ? "":"<span class='faint'>Hire or install an agent with the required capabilities first.</span>"}</form>` : `<div class="row"><a class="btn small" href="#/agent/${esc(w.agent_id)}">Open agent & audit trail</a>${w.status === "awaiting_approval" ? '<a class="btn primary small" href="#/inbox">Review next action</a>':""}</div>`}
+      ${!w.run_id || ["needs_correction","failed","cancelled"].includes(w.status) ? `<div class="row"><button class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}" data-dept="${esc(w.department_id)}">Create an agent for this job</button></div><form class="row" data-form="assign-ticket" data-id="${id}"><label class="field">Choose an agent<select name="agent_id" required>${opts(eligible.map(a=>[a.id,a.name]),"")}</select></label><label class="field">AI model<select name="mode">${opts(S["model-profiles"].filter(m=>m.enabled).map(m=>[m.id,m.id === "demo" ? "Demo · fixed templates" : m.name]),"demo")}</select></label><button class="btn primary" ${eligible.length ? "":"disabled"}>${w.run_id ? "Revise & rerun" : "Assign & start"}</button>${eligible.length ? "":"<span class='faint'>Hire or install an agent with the required capabilities first.</span>"}</form>` : `<div class="row"><a class="btn small" href="#/agent/${esc(w.agent_id)}">Open agent & audit trail</a>${w.status === "awaiting_approval" ? '<a class="btn primary small" href="#/inbox">Review next action</a>':""}</div>`}
       ${w.artifacts?.length ? `<details ${w.finished_at ? "open":""}><summary>Deliverables & evidence (${w.artifacts.length})</summary><div class="stack">${w.artifacts.map((x,i)=>artifactView(w.run_id + "-" + i,x)).join("")}</div></details>` : ""}
       ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
       ${w.finished_at && !w.outcome && ["completed","failed"].includes(w.status) && canReview ? `<form class="stack" data-form="review-ticket" data-id="${id}"><label class="field">Outcome notes<textarea name="comment" required placeholder="Do the deliverables meet the brief and company rules? What needs correction?"></textarea></label><div class="row"><button class="btn primary small" name="success" value="true" ${w.deliverables_ready && w.status === "completed" ? "":"disabled"}>Accept work</button><button class="btn small" name="success" value="false">Needs correction</button></div></form>`:""}
       ${w.outcome ? `<p><b>Manager outcome:</b> ${esc(w.outcome.comment)}</p>`:""}</section>`;
-    }).join("")}</div>`;
+    }).join("")}</div></details></div>`;
 }
 
 function agentCard(a) {
@@ -197,9 +201,9 @@ function agentCard(a) {
 function agentsScreen() {
   const pending = S.approvals.filter(a => a.status === "pending"), drafts = S.proposals.filter(p => p.status === "draft");
   return `<div class="screen">
-    <div class="head"><div><h1>Your agents</h1><p class="muted">Assign recurring work from Team work, or open an agent for an individual request.</p></div></div>
+    <div class="head"><div><h1>Your agents</h1><p class="muted">Pick an agent. Give it something to do.</p></div></div>
     ${pending.length ? `<a class="banner" href="#/inbox">${icon("inbox")}<span><b>${pending.length} action${pending.length === 1 ? "" : "s"}</b> waiting for your review</span><span class="arrow">Open inbox ${icon("arrow", "sm")}</span></a>` : ""}
-    ${S.agents.length ? `<div class="grid">${S.agents.map(agentCard).join("")}</div>` : `<div class="panel">${emptyState("No agents yet", "Choose a model, pick what it can do, and it is ready in under a minute.", canHire() ? `<a class="btn primary" href="#/create">${icon("plus", "sm")}Create your first agent</a>` : `<p class="faint">Switch to a manager or builder identity to create agents.</p>`)}</div>`}
+    ${S.agents.length ? `<div class="grid">${S.agents.map(agentCard).join("")}</div>` : `<div class="panel">${emptyState("No agents yet", "Start with one skill.", canHire() ? `<a class="btn primary" href="#/create">${icon("plus", "sm")}Create your first agent</a>` : `<p class="faint">Switch to a manager or builder identity to create agents.</p>`)}</div>`}
     ${drafts.length ? `<details class="panel plain tight"><summary>${drafts.length} draft${drafts.length === 1 ? "" : "s"} waiting for confirmation</summary><div class="stack">${drafts.map(p => `<div class="row between"><span>${esc(p.spec.name)} <span class="faint">· ${esc(userName(p.spec.manager_id))} confirms</span></span><button class="btn small" data-act="resume-draft" data-id="${esc(p.id)}">Review</button></div>`).join("")}</div></details>` : ""}
   </div>`;
 }
@@ -207,38 +211,32 @@ function agentsScreen() {
 /* --- create wizard --- */
 const EXAMPLES = ["Turn meeting notes into a short slide deck", "Summarize web pages I send it", "Analyze a CSV and call out what stands out", "Write one-page briefs from a few bullet points"];
 function modelChoice(m) {
-  const sub = m.id === "demo" ? "No AI model. Runs a fixed template so you can see the whole flow without an API key."
-    : m.enabled ? "Writes original content, reads the pages you link, and answers follow-up questions."
-    : `Add ${m.id === "meta" ? "MODEL_API_KEY" : "GEMINI_API_KEY"} to .env and restart the server to enable.`;
+  const sub = m.id === "demo" ? "Templates only · no live AI" : m.enabled ? "Connected" : "Ask your admin to connect";
   return `<button type="button" class="choice" data-act="wiz-model" data-id="${esc(m.id)}" aria-pressed="${wiz.mode === m.id}" ${m.enabled ? "" : "disabled"}><span class="mark">${icon("check")}</span><span class="body"><span class="title">${esc(m.id === "demo" ? "Demo" : m.name)}${m.id === "demo" ? pill("ask", "Works offline") : pill("alone", m.id === "meta" ? "Meta" : "Google")}</span><span class="sub">${esc(sub)}</span></span></button>`;
 }
 function capChoice(c) {
-  return `<button type="button" class="choice multi" data-act="wiz-cap" data-id="${esc(c.id)}" aria-pressed="${wiz.caps.includes(c.id)}"><span class="mark">${icon("check")}</span><span class="body"><span class="title">${icon(c.icon || "tool")}${esc(c.name)}</span><span class="sub">${esc(c.description)}</span></span></button>`;
+  return `<button type="button" class="choice multi" data-act="wiz-cap" data-id="${esc(c.id)}" aria-pressed="${wiz.caps.includes(c.id)}"><span class="mark">${icon("check")}</span><span class="body"><span class="title">${icon(c.icon || "tool")}${esc(c.name)}</span></span></button>`;
 }
 function createScreen() {
   if (!wiz.mode) wiz.mode = S["model-profiles"].find(m => m.id !== "demo" && m.enabled)?.id || "demo";
   wiz.dept ||= defaultDept(); wiz.manager ||= defaultManager();
+  if (wiz.step === 1) wiz.step = 2;
   const step = wiz.step, p = wiz.proposal;
   const workspace = S.capabilities.filter(c => (c.group || "Workspace") !== "Support sandbox"), support = S.capabilities.filter(c => c.group === "Support sandbox");
-  const marks = ["Model", "Capabilities", "Review"].map((t, i) => `<li class="${step === i + 1 ? "current" : step > i + 1 ? "done" : ""}"><b>${step > i + 1 ? icon("check", "sm") : i + 1}</b>${t}</li>`).join("");
+  const marks = ["Choose skills", "Review & create"].map((t, i) => `<li class="${step === i + 2 ? "current" : step > i + 2 ? "done" : ""}"><b>${step > i + 2 ? icon("check", "sm") : i + 1}</b>${t}</li>`).join("");
   let body = "";
-  if (step === 1) {
-    body = `<section class="panel stack"><div><h2>Choose a model</h2><p class="muted">This is the brain behind the agent. You can switch later.</p></div>
-      <div class="stack">${S["model-profiles"].map(modelChoice).join("")}</div>
-      <div class="row between"><span class="faint">${wiz.mode === "demo" ? "Demo content is a template. Pick a live model for real writing." : ""}</span><button class="btn primary" data-act="wiz-go" data-step="2">Continue ${icon("arrow", "sm")}</button></div></section>`;
-  } else if (step === 2) {
-    body = `<section class="panel stack"><div><h2>What should it be able to do?</h2><p class="muted">Pick one or more capabilities, or describe the job and the Recruiter will choose.</p></div>
-      <div class="tiles">${workspace.map(capChoice).join("")}</div>
+  if (step === 2) {
+    body = `<section class="panel stack"><div><h2>What’s its job?</h2></div>
+      <label class="field">Describe the job<textarea data-draft="wiz-text" placeholder="For example: turn my meeting notes into a short slide deck">${esc(wiz.text)}</textarea></label>
+      <p class="muted">Choose its skills</p><div class="tiles">${workspace.map(capChoice).join("")}</div>
       ${support.length ? `<details><summary>Support sandbox capabilities (sample tickets)</summary><div class="tiles">${support.map(capChoice).join("")}</div></details>` : ""}
-      <div class="or">or describe it</div>
-      <label class="field">Describe the job<textarea data-draft="wiz-text" placeholder="For example: an assistant that turns meeting notes into a short deck">${esc(wiz.text)}</textarea></label>
-      <div class="chips">${EXAMPLES.map(t => `<button type="button" class="chip-btn" data-act="wiz-example" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+      <details class="advanced-settings"><summary>AI model: ${esc(modelLabel(wiz.mode))} · change</summary><p class="muted">${wiz.mode === "demo" ? "Demo uses templates, not live AI." : "Change the model below."}</p><div class="stack">${S["model-profiles"].map(modelChoice).join("")}</div></details>
       <details><summary>More options</summary><div class="split"><label class="field">Agent name<input data-draft="wiz-name" value="${esc(wiz.name)}" placeholder="Chosen for you"></label><label class="field">Manager (approves its work)<select data-draft="wiz-manager">${opts(S["dev/users"].filter(u => u.roles.includes("manager") || u.roles.includes("admin")).map(u => [u.id, u.name]), wiz.manager)}</select></label><label class="field">Department<select data-draft="wiz-dept">${opts(S.departments.map(d => [d.id, d.name]), wiz.dept)}</select></label></div></details>
-      <div class="row between"><button class="btn ghost" data-act="wiz-go" data-step="1">${icon("back", "sm")}Back</button><button class="btn primary" data-act="wiz-draft" ${canHire() ? "" : "disabled"}>Continue ${icon("arrow", "sm")}</button></div>${canHire() ? "" : '<p class="faint">Your role cannot create agents. Switch to a manager or builder identity.</p>'}</section>`;
+      <div class="row between"><span class="faint">${wiz.mode === "demo" ? "Demo · no live AI" : esc(modelLabel(wiz.mode))}</span><button class="btn primary" data-act="wiz-draft" ${canHire() ? "" : "disabled"}>Review agent ${icon("arrow", "sm")}</button></div>${canHire() ? "" : '<p class="faint">Your role cannot create agents. Switch to a manager or builder identity.</p>'}</section>`;
   } else if (p) {
     const confirmable = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user), upgrade = p.kind !== "hire";
     body = `<section class="panel stack review"><div class="row">${orb(p.id, { size: 56 })}<div><h2>${esc(p.spec.name)}</h2><p class="muted">${upgrade ? "Review the added capability" : "Ready to create"}</p></div></div>
-      <dl><dt>Does</dt><dd>${esc(p.spec.job_description)}</dd><dt>Capabilities</dt><dd class="caps">${p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(capChip).join("")}</dd><dt>Model</dt><dd>${esc(modelLabel(p.spec.model_profile_id))}</dd><dt>Starts in</dt><dd>${modePill({ level: "intern" })} <span class="muted">${upgrade ? "Adding capabilities resets the agent to ask first." : "Every action waits for approval until you switch it."}</span></dd><dt>Approved by</dt><dd>${esc(userName(p.spec.manager_id))}</dd></dl>
+      <dl><dt>Does</dt><dd>${esc(p.spec.job_description)}</dd><dt>Capabilities</dt><dd class="caps">${p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(capChip).join("")}</dd><dt>Model</dt><dd>${esc(modelLabel(p.spec.model_profile_id))}</dd><dt>Review setting</dt><dd>${modePill({ level: "intern" })} <span class="muted">${upgrade ? "New skills ask first." : "Approve each action."}</span></dd><dt>Approved by</dt><dd>${esc(userName(p.spec.manager_id))}</dd></dl>
       <details><summary>Technical details</summary><pre>${json(p)}</pre></details>
       <div class="row between"><button class="btn ghost" data-act="wiz-go" data-step="2">${icon("back", "sm")}Edit</button><button class="btn primary" data-act="wiz-confirm" data-id="${esc(p.id)}" data-rev="${p.revision}" ${confirmable ? "" : "disabled"}>${upgrade ? "Add capability" : "Create agent"}</button></div>
       ${confirmable ? "" : `<p class="faint">${esc(userName(p.spec.manager_id))} or an admin has to confirm this.</p>`}</section>`;
@@ -269,7 +267,7 @@ function actionPreview(a) {
 }
 function askCard(a) {
   const ag = agentById(a.agent_id), mine = a.assigned_manager_id === user || S.me.roles.includes("admin");
-  const why = ag && alone(ag) ? "This action has effects beyond reading, so it always asks." : "This agent asks first. Approving covers only this one action.";
+  const why = ag && alone(ag) ? "This action needs your approval." : "Approve this action to continue.";
   return `<article class="panel ask-card stack"><div class="row between"><span class="row">${orb(a.agent_id, { size: 34, level: ag?.level })}<span><b>${esc(ag?.name || "Agent")}</b> <span class="muted">wants to ${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)}</span></span></span>${pill("warn", "Needs you")}</div>
     <p class="why">${esc(why)}</p>${actionPreview(a)}
     <form class="decide" data-form="decide" data-id="${esc(a.id)}"><input name="comment" placeholder="Note for the agent (needed to send it back)" aria-label="Note for the agent">
@@ -364,13 +362,14 @@ function agentScreen(id) {
     return `${gap}<div class="turn"><div class="you">${esc(r.task)}</div><div class="reply">${orb(a.id, { size: 34, level: a.level })}<div class="out">${runBody(r, a)}</div></div></div>`;
   }).join("");
   const lb = S.leaderboard.agents.find(r => r.agent_id === id), m = ui.metrics[id];
-  return `<div class="screen"><a class="btn small" href="#/work">Team work queue</a><a class="back" href="#/agents">${icon("back", "sm")}Agents</a>
+  return `<div class="screen"><div class="head"><a class="back" href="#/agents">${icon("back", "sm")}Your agents</a>${manages ? `<button class="btn small" data-act="share-agent" data-id="${esc(id)}">${icon("copy","sm")}Share template</button>` : ""}</div>
     <div class="agent-head">${orb(a.id, { size: 72, level: a.level, cls: (ui.fresh === a.id ? "ignite " : "") + (ui.unlock === a.id ? "unlock" : "") })}
       <div class="meta"><div class="row between"><h1>${esc(a.name)}</h1>${a.status !== "active" ? statusPill(a.status) : ""}</div>
         <div class="row"><div class="seg" role="group" aria-label="Autonomy"><button data-act="mode" data-id="${esc(a.id)}" data-level="intern" aria-pressed="${!alone(a)}" ${manages ? "" : "disabled"}>${icon("shield", "sm")}Asks first</button><button data-act="mode" data-id="${esc(a.id)}" data-level="associate" data-tone="alone" aria-pressed="${alone(a)}" ${manages ? "" : "disabled"}>${icon("bolt", "sm")}Runs alone</button></div><span class="pill">${icon("model", "sm")}${esc(modelLabel(a.model_profile_id))}</span></div>
         <div class="caps">${caps.map(capChip).join("")}</div></div></div>
-    ${a.status !== "active" ? `<section class="panel stack"><h2>Connect before the first task</h2><p class="muted">This agent needs its own validated connections. Trust and credentials never travel with a template.</p><div><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Validate and activate</button></div></section>` : ""}
-    <div class="thread">${thread || `<div class="panel plain">${emptyState("Ask your first question", a.status === "active" ? "Give it a task below. " + (alone(a) ? "It will start right away." : "It will ask you before it acts.") : "Activate this agent first.")}</div>`}</div>
+    ${a.status !== "active" ? `<section class="panel stack"><h2>One step to get ready</h2><p class="muted">Connect this copy to your workspace.</p><div><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Connect & enable agent</button></div></section>` : ""}
+    ${!runs.length ? `<div class="first-task"><div class="task-path"><span class="done">${icon("check")}Agent created</span>${icon("arrow","sm")}<span>${icon("send")}Give it a task</span>${icon("arrow","sm")}<span>${icon("shield")}Review</span></div>${usable === "demo" ? '<span class="pill ask">Demo · template outputs</span>' : ""}</div>` : ""}
+    <div class="thread">${thread}</div>
     <form class="composer" data-form="run" data-id="${esc(id)}">
       ${!runs.length && ex.length ? `<div class="chips">${ex.map(t => `<button type="button" class="chip-btn" data-act="example" data-id="${esc(id)}" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
       <textarea name="task" data-draft="run" data-id="${esc(id)}" required placeholder="${follow ? "Ask a follow-up…" : "What should it do?"}" aria-label="Task" ${a.status === "active" ? "" : "disabled"}>${esc(draft)}</textarea>
@@ -378,7 +377,7 @@ function agentScreen(id) {
         <button class="btn primary" ${a.status === "active" ? "" : "disabled"}>${icon("send", "sm")}${follow ? "Ask" : "Send"}</button></div></form>
     <details class="panel plain"><summary>Agent details</summary><div class="stack"><div class="kv-list"><b>Job</b><p class="muted">${esc(a.job_description)}</p><b>Instructions</b><p class="muted">${esc(a.instructions)}</p></div>
       <div class="stack">${caps.flatMap(c => c.tool_contracts).map(t => `<div class="row"><b>${esc(TOOL_VERB[t.name] ? TOOL_VERB[t.name][0].toUpperCase() + TOOL_VERB[t.name].slice(1) : t.name)}</b>${pill((RISK[t.risk] || ["", ""])[1], (RISK[t.risk] || [t.risk])[0])}</div>`).join("")}</div>
-      <div class="row"><button class="btn small" data-act="perf" data-id="${esc(id)}">${m ? "Refresh" : "Load"} performance</button><button class="btn small" data-act="share-agent" data-id="${esc(id)}">Share as template</button></div>
+      <div class="row"><button class="btn small" data-act="perf" data-id="${esc(id)}">${m ? "Refresh" : "Load"} performance</button></div>
       ${m ? `<table class="data"><tbody><tr><td>Actions reviewed</td><td class="num">${m.p.reviewed_actions}</td></tr><tr><td>Approved</td><td class="num">${m.p.approved_actions}</td></tr><tr><td>Results rated good</td><td class="num">${m.p.successful_tasks} of ${m.p.evaluated_tasks}</td></tr><tr><td>Tasks finished</td><td class="num">${m.p.completed_runs} of ${m.p.run_count}</td></tr><tr><td>Spec versions</td><td class="num">${m.v.length}</td></tr></tbody></table>` : ""}
       <p class="faint">${esc(deptName(a.department_id))} · manager ${esc(userName(a.manager_id))} · spec v${a.spec_version}${lb ? " · " + (lb.reviewed_actions) + " actions reviewed" : ""}</p></div></details>
   </div>`;
@@ -386,7 +385,7 @@ function agentScreen(id) {
 
 function inboxScreen() {
   const pending = S.approvals.filter(a => a.status === "pending"), past = S.approvals.filter(a => a.status !== "pending");
-  return `<div class="screen"><div class="head"><div><h1>Inbox</h1><p class="muted">Agents that ask first pause here. Approve one action at a time.</p></div></div>
+  return `<div class="screen"><div class="head"><div><h1>Review actions</h1><p class="muted">Approve an action to keep things moving.</p></div></div>
     ${pending.length ? `<div class="stack">${pending.map(askCard).join("")}</div>` : `<div class="panel">${emptyState("You're all caught up", "Actions that need a person will show up here.", `<a class="btn" href="#/agents">Go to agents</a>`)}</div>`}
     ${past.length ? `<details class="panel plain tight"><summary>History (${past.length})</summary><div class="stack">${past.slice().reverse().slice(0, 25).map(a => `<div class="row between"><span>${esc(agentById(a.agent_id)?.name || "Agent")} <span class="muted">· ${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)}</span></span>${pill(a.status === "approved" ? "ok" : a.status === "rejected" ? "bad" : "warn", a.status.replace(/_/g, " "))}</div>`).join("")}</div></details>` : ""}</div>`;
 }
@@ -428,11 +427,11 @@ function libraryScreen() {
   const caps = groups.map(([g, list]) => `<div class="panel stack"><h2>${esc(g)}</h2><div class="list">${list.map(c => `<div class="item"><div class="main"><b class="row">${icon(c.icon || "tool")}${esc(c.name)}</b><span class="muted">${esc(c.description)}</span><span class="caps">${c.tool_contracts.map(t => pill((RISK[t.risk] || ["", ""])[1], (RISK[t.risk] || [t.risk])[0])).join("")}<span class="faint">by ${esc(userName(c.creator_id))} · ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"} using it</span></span></div>
       <div class="acts"><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>${icon("plus", "sm")}New agent</button>${mine.length ? `<form class="row" data-form="add-cap" data-id="${esc(c.id)}"><select name="target_agent_id" aria-label="Add ${esc(c.name)} to">${opts(mine.map(a => [a.id, a.name]), "")}</select><button class="btn small">Add</button></form>` : ""}</div></div>`).join("")}</div></div>`).join("");
   const listings = S.marketplace.filter(l => l.kind === "agent");
-  const shared = `<div class="panel stack"><div><h2>Shared agents</h2><p class="muted">Templates your team published. Installing copies the job and instructions, never credentials or earned trust.</p></div>
+  const shared = `<div class="panel stack"><div><h2>Shared agents</h2><p class="muted">Templates your team published. Install a copy. Connect it. Make it yours.</p></div>
     ${listings.length ? `<div class="list">${listings.map(l => `<div class="item"><div class="main"><b>${esc(l.payload.name)}</b><span class="muted">${esc(l.payload.job_description)}</span><span class="faint">by ${esc(userName(l.creator_id || l.publisher_id))} · ${l.installation_count} install${l.installation_count === 1 ? "" : "s"}</span></div>
       <form class="acts" data-form="install" data-id="${esc(l.id)}"><select name="manager_id" aria-label="Manager">${opts(S["dev/users"].filter(u => u.roles.includes("manager") || u.roles.includes("admin")).map(u => [u.id, u.name]), defaultManager())}</select><button class="btn small primary" ${canHire() ? "" : "disabled"}>Install</button></form></div>`).join("")}</div>` : `<p class="faint">Nothing shared yet. Open an agent and choose “Share as template”.</p>`}</div>`;
   const add = `<details class="panel plain"><summary>Add a capability (admin)</summary><form class="stack" data-form="new-cap"><div class="split"><label class="field">Name<input name="name" required maxlength="100"></label><label class="field">What it does<input name="description" required maxlength="500"></label></div><div class="tools-pick" role="group" aria-label="Tools">${Object.entries(TOOL_VERB).map(([k, v]) => `<label><input type="checkbox" name="tools" value="${esc(k)}">${esc(v[0].toUpperCase() + v.slice(1))}</label>`).join("")}</div><div><button class="btn small primary" ${S.me.roles.includes("admin") ? "" : "disabled"}>Add capability</button> ${S.me.roles.includes("admin") ? "" : '<span class="faint">Only admins can add capabilities.</span>'}</div></form></details>`;
-  return `<div class="screen"><div class="head"><div><h1>Library</h1><p class="muted">Capabilities your company set up once. Any allowed agent can plug them in.</p></div><div class="seg" role="group" aria-label="Library"><button data-act="lib" data-tab="capabilities" aria-pressed="${ui.lib === "capabilities"}">Capabilities</button><button data-act="lib" data-tab="agents" aria-pressed="${ui.lib === "agents"}">Shared agents</button></div></div>${ui.lib === "capabilities" ? caps + add : shared}</div>`;
+  return `<div class="screen"><div class="head"><div><h1>Library</h1><p class="muted">Ready-made skills. Reuse them in any agent.</p></div><div class="seg" role="group" aria-label="Library"><button data-act="lib" data-tab="capabilities" aria-pressed="${ui.lib === "capabilities"}">Capabilities</button><button data-act="lib" data-tab="agents" aria-pressed="${ui.lib === "agents"}">Shared agents</button></div></div>${ui.lib === "capabilities" ? caps + add : shared}</div>`;
 }
 
 /* ---------- events ---------- */
@@ -458,8 +457,8 @@ document.addEventListener("click", e => {
   }, b);
   if (kind === "wiz-confirm") act(async () => {
     const upgrade = wiz.proposal.kind !== "hire", a = await api(`recruiter/proposals/${id}/confirm`, "POST", { revision: Number(b.dataset.rev) });
-    const destination = wiz.work ? "#/work" : "#/agent/" + a.id; wiz = wiz0(); ui.fresh = upgrade ? null : a.id; location.hash = destination;
-    return upgrade ? `Capability added to ${a.name}. It asks first again.` : `${a.name} is ready. Assign a job from Team work.`;
+    const fromWork = wiz.work, destination = fromWork ? "#/work" : "#/agent/" + a.id; wiz = wiz0(); ui.fresh = upgrade ? null : a.id; location.hash = destination;
+    return upgrade ? `Capability added to ${a.name}. It asks first again.` : (fromWork ? `${a.name} is ready. Choose it under your job and select Assign & start.` : `${a.name} is ready. Give it a task to try it out.`);
   }, b);
   if (kind === "resume-draft") { const p = S.proposals.find(x => x.id === id); wiz = { ...wiz0(), step: 3, proposal: p, mode: p.spec.model_profile_id, caps: p.spec.capability_ids, target: p.target_agent_id || "" }; location.hash = "#/create"; }
   if (kind === "use-cap") { wiz = { ...wiz0(), caps: [id], step: 1 }; location.hash = "#/create"; }
@@ -536,69 +535,7 @@ document.addEventListener("keydown", e => {
 $("#identity").addEventListener("change", e => { user = e.target.value; sessionStorage.setItem("dev-user", user); wiz = wiz0(); S.steps = {}; act(async () => `Now using ${userName(user)}'s workspace.`); });
 addEventListener("hashchange", async () => { if (route().name === "agent") await loadSteps().catch(() => {}); render(); enter(); scrollTo({ top: 0 }); });
 
-/* Tilt: pointer-driven depth on cards, fine pointers only */
-if (matchMedia("(hover: hover) and (pointer: fine)").matches && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-  document.addEventListener("pointermove", e => {
-    const t = e.target.closest?.(".tilt"); if (!t) return;
-    const r = t.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
-    t.style.setProperty("--ry", ((x - 0.5) * 9).toFixed(2) + "deg"); t.style.setProperty("--rx", ((0.5 - y) * 7).toFixed(2) + "deg");
-    t.style.setProperty("--gx", (x * 100).toFixed(1) + "%"); t.style.setProperty("--gy", (y * 100).toFixed(1) + "%"); t.style.setProperty("--glare", "1");
-  });
-  document.addEventListener("pointerout", e => {
-    const t = e.target.closest?.(".tilt"); if (!t || t.contains(e.relatedTarget)) return;
-    t.style.setProperty("--rx", "0deg"); t.style.setProperty("--ry", "0deg"); t.style.setProperty("--glare", "0");
-  });
-}
-
-/* ---------- 3D backdrop: a slowly turning wireframe globe on a canvas ---------- */
-function startSpace() {
-  const cv = $("#space"), ctx = cv.getContext("2d"); if (!ctx) return;
-  const still = matchMedia("(prefers-reduced-motion: reduce)");
-  const N = 340, pts = [], links = [], stars = [];
-  for (let i = 0; i < N; i++) { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), a = i * 2.399963; pts.push([Math.cos(a) * r, y, Math.sin(a) * r]); }
-  for (let i = 0; i < N; i++) {
-    const near = pts.map((p, j) => [j, (p[0] - pts[i][0]) ** 2 + (p[1] - pts[i][1]) ** 2 + (p[2] - pts[i][2]) ** 2]).sort((a, b) => a[1] - b[1]).slice(1, 4);
-    near.forEach(([j]) => { if (i < j || !near.some(() => false)) links.push([i, j]); });
-  }
-  for (let i = 0; i < 90; i++) stars.push([(Math.random() - 0.5) * 3.4, (Math.random() - 0.5) * 3.4, (Math.random() - 0.5) * 3.4]);
-  const ring = (rx, tilt) => Array.from({ length: 120 }, (_, i) => { const a = (i / 120) * Math.PI * 2; return [Math.cos(a) * rx, Math.sin(a) * rx * Math.sin(tilt), Math.sin(a) * rx * Math.cos(tilt)]; });
-  const rings = [ring(1.32, 0.5), ring(1.62, -0.35)];
-  let W = 0, H = 0, ry = 0, rx = -0.32, tx = 0, ty = 0, cx = 0, cy = 0, last = 0, raf = 0;
-  const size = () => { const d = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight; cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0); };
-  const proj = (p, R, spin) => {
-    const c = Math.cos(ry * spin), s = Math.sin(ry * spin), x1 = p[0] * c + p[2] * s, z1 = -p[0] * s + p[2] * c, cxr = Math.cos(rx), sxr = Math.sin(rx), y2 = p[1] * cxr - z1 * sxr, z2 = p[1] * sxr + z1 * cxr, k = 1 / (1 - z2 * 0.3);
-    return [cxx + x1 * R * k, cyy + y2 * R * k, z2];
-  };
-  let cxx = 0, cyy = 0;
-  function draw() {
-    ctx.clearRect(0, 0, W, H);
-    const R = Math.min(W, H) * (W < 700 ? 0.5 : 0.4); cxx = W < 700 ? W * 0.5 : W * 0.74; cyy = H * 0.5;
-    ctx.fillStyle = "rgba(170,200,255,.35)";
-    for (const s of stars) { const [x, y, z] = proj(s, R, 0.35); ctx.globalAlpha = 0.18 + 0.3 * ((z + 1.7) / 3.4); ctx.fillRect(x, y, 1.2, 1.2); }
-    ctx.globalAlpha = 1;
-    const P = pts.map(p => proj(p, R, 1));
-    ctx.lineWidth = 0.7;
-    for (const [i, j] of links) { const d = (P[i][2] + P[j][2]) / 2; ctx.strokeStyle = `rgba(79,240,200,${(0.03 + 0.12 * (d + 1) / 2).toFixed(3)})`; ctx.beginPath(); ctx.moveTo(P[i][0], P[i][1]); ctx.lineTo(P[j][0], P[j][1]); ctx.stroke(); }
-    for (let i = 0; i < N; i++) { const [x, y, z] = P[i], d = (z + 1) / 2; ctx.fillStyle = `rgba(150,255,226,${(0.08 + 0.55 * d).toFixed(3)})`; ctx.beginPath(); ctx.arc(x, y, 0.7 + 1.5 * d, 0, 6.2832); ctx.fill(); if (i % 41 === 0) { ctx.fillStyle = `rgba(79,240,200,${(0.06 + 0.1 * d).toFixed(3)})`; ctx.beginPath(); ctx.arc(x, y, 7 + 5 * d, 0, 6.2832); ctx.fill(); } }
-    ctx.lineWidth = 1;
-    rings.forEach((rg, k) => { ctx.strokeStyle = k ? "rgba(143,180,255,.2)" : "rgba(79,240,200,.22)"; ctx.beginPath(); rg.forEach((p, i) => { const [x, y] = proj(p, R, k ? -0.6 : 0.5); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); ctx.stroke(); });
-  }
-  function frame(t) {
-    const dt = Math.min(60, t - last || 16); last = t;
-    ry += dt * 0.00007; cx += (tx - cx) * 0.04; cy += (ty - cy) * 0.04; rx = -0.32 + cy; ry += (cx - 0) * 0.0004;
-    draw(); raf = requestAnimationFrame(frame);
-  }
-  const start = () => { cancelAnimationFrame(raf); size(); if (still.matches) draw(); else raf = requestAnimationFrame(frame); };
-  addEventListener("resize", start);
-  addEventListener("pointermove", e => { tx = (e.clientX / innerWidth - 0.5) * 2; ty = (e.clientY / innerHeight - 0.5) * 0.25; }, { passive: true });
-  document.addEventListener("visibilitychange", () => { cancelAnimationFrame(raf); if (!document.hidden) start(); });
-  still.addEventListener?.("change", start);
-  start();
-}
-
-/* ---------- boot and polling ---------- */
 (async () => {
-  startSpace();
   try { await load(); render(); enter(); }
   catch (e) { $("#view").innerHTML = `<div class="panel">${emptyState("Workspace unavailable", "Start the server with python server.py, then reload.")}</div>`; toast(e.message, true); }
 })();
