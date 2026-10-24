@@ -40,11 +40,11 @@ const icon = (name, cls = "") => `<svg class="ic ${cls}" viewBox="0 0 24 24" ari
 
 /* ---------- state ---------- */
 let user = sessionStorage.getItem("dev-user") || "pavan";
-let S = { steps: {} };
+let S = { steps: {}, conversations: {} };
 let busy = false;
 const forge0 = () => ({ caps: [], text: "", name: "", mode: null, more: false, target: "" });
 let forge = forge0();
-const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, apart: {}, drafts: {}, metrics: {}, revise: {}, pulse: 0, stick: true };
+const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, drafts: {}, metrics: {}, revise: {}, pulse: 0, stick: true };
 
 async function api(path, method = "GET", body) {
   const headers = { "X-Dev-User": user };
@@ -56,22 +56,79 @@ async function api(path, method = "GET", body) {
 }
 
 async function load() {
-  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "runs", "marketplace", "leaderboard", "work-queue"];
+  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "marketplace", "leaderboard", "work-queue"];
   const vals = await Promise.all(paths.map(p => api(p)));
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
   S.approvals = await api("approvals").catch(() => []);
   S.proposals = await api("recruiter/proposals").catch(() => []);
-  await loadSteps();
+  if (route().name === "agent") await loadSteps();
+  else S.runs = await api("runs");
   sidebar();
+  syncActivityStream();
+}
+function applyActivity(snapshot) {
+  const id = snapshot.agent.id;
+  const exists = S.agents.some(a => a.id === id);
+  S.agents = S.agents.map(a => a.id === id ? snapshot.agent : a).filter(a => a.status !== "archived");
+  if (!exists && snapshot.agent.status !== "archived") S.agents.push(snapshot.agent);
+  S.runs = [...(S.runs || []).filter(r => r.agent_id !== id), ...snapshot.runs];
+  S.approvals = [...(S.approvals || []).filter(a => a.agent_id !== id), ...snapshot.approvals];
+  S.conversations[id] = snapshot.conversations;
+  for (const run of snapshot.runs) S.steps[run.id] = { updated: run.updated_at, list: snapshot.steps.filter(x => x.run_id === run.id) };
 }
 async function loadSteps() {
   const r = route();
-  if (r.name !== "agent") return;
-  await Promise.all(S.runs.filter(x => x.agent_id === r.id).map(async run => {
-    if (S.steps[run.id]?.updated === run.updated_at) return;
-    try { S.steps[run.id] = { updated: run.updated_at, list: await api(`runs/${run.id}/steps`) }; } catch { /* shown as empty */ }
-  }));
+  if (r.name === "agent") applyActivity(await api(`agents/${r.id}/activity`));
 }
+
+/* One authenticated status stream for the open chat; no model-token streaming. */
+let activityConnection = null;
+function syncActivityStream() {
+  const id = route().name === "agent" && !document.hidden ? route().id : null;
+  const key = id ? user + ":" + id : null;
+  if (activityConnection?.key === key) return;
+  activityConnection?.controller.abort();
+  activityConnection = null;
+  if (!key) return;
+  const state = { key, controller: new AbortController() };
+  activityConnection = state;
+  (async () => {
+    while (!state.controller.signal.aborted) {
+      try {
+        const response = await fetch(`/api/agents/${id}/events`, { headers: { "X-Dev-User": user }, signal: state.controller.signal });
+        if (!response.ok || !response.body) throw Error("Activity stream unavailable");
+        const reader = response.body.getReader(), decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let end;
+            while ((end = buffer.indexOf("\n\n")) >= 0) {
+              const block = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+              if (block.startsWith("event: access-lost")) { state.controller.abort(); toast("Agent access changed. Refresh your workspace.", true); break; }
+              if (!block.startsWith("event: snapshot") || activityConnection !== state) continue;
+              const line = block.split("\n").find(x => x.startsWith("data: "));
+              if (line) { applyActivity(JSON.parse(line.slice(6))); ui.activityDirty = true; flushActivity(); }
+            }
+          }
+        } finally { reader.releaseLock(); }
+      } catch (e) { if (state.controller.signal.aborted) return; }
+      if (!state.controller.signal.aborted) await new Promise(resolve => setTimeout(resolve, 2500));
+    }
+  })();
+}
+function flushActivity() {
+  if (!ui.activityDirty || busy || document.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || $("details.menu[open]")) return;
+  ui.activityDirty = false;
+  const open = $$("details.quiet[open]").map(d => d.querySelector("summary")?.textContent);
+  ui.stick = innerHeight + scrollY > document.body.scrollHeight - 200;
+  sidebar(); render(); ui.stick = true;
+  $$("details.quiet").forEach(d => { if (open.includes(d.querySelector("summary")?.textContent)) d.setAttribute("open", ""); });
+}
+document.addEventListener("focusout", () => setTimeout(flushActivity, 0));
+document.addEventListener("visibilitychange", syncActivityStream);
 
 /* ---------- lookups ---------- */
 const agentById = id => S.agents.find(a => a.id === id);
@@ -92,8 +149,6 @@ const RISK = { read: "reads only", local_write: "saves in your workspace", alway
 const SHORT = { "make-slideshow": "Slides", "write-document": "Documents", "analyze-data": "Data", "research-web": "Web research", "ticket-search": "Tickets", "help-docs": "Help docs", "reply-drafts": "Reply drafts" };
 const short = c => SHORT[c.id] || c.name;
 const opts = (list, sel) => list.map(([v, t, dis]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""} ${dis ? "disabled" : ""}>${esc(t)}</option>`).join("");
-const CALLSIGNS = ["Nova", "Atlas", "Orion", "Vega", "Lyra", "Juno", "Echo", "Kite", "Rhea", "Sol", "Iris", "Tycho", "Cosmo", "Halo", "Quill", "Pixel"];
-const callsign = () => CALLSIGNS.find(n => !S.agents.some(a => a.name === n)) || "Agent " + (S.agents.length + 1);
 const agentState = a => S.runs.some(r => r.agent_id === a.id && r.status === "awaiting_approval") ? "waiting" : S.runs.some(r => r.agent_id === a.id && ["queued", "running"].includes(r.status)) ? "working" : a.status !== "active" ? "setup" : "";
 
 function hash(str) { let h = 2166136261; for (const c of String(str)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
@@ -143,7 +198,7 @@ function enter() { const v = $("#view"); v.classList.remove("enter"); void v.off
 /* ---------- sidebar: agents are the navigation, like conversations ---------- */
 function sidebar() {
   $("#identity").innerHTML = opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]), user);
-  const pending = S.approvals.filter(a => a.status === "pending").length, jobs = (S["work-queue"] || []).length;
+  const pending = S.approvals.filter(a => a.status === "pending").length + S.proposals.filter(p => p.status === "draft").length, jobs = (S["work-queue"] || []).length;
   $("#agent-list").innerHTML = S.agents.length ? S.agents.map(a => { const st = agentState(a); return `<li><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a></li>`; }).join("") : `<li class="none">No agents yet</li>`;
   $("#side-links").innerHTML = [["inbox", "inbox", "Approvals", pending], ["leaderboard", "trophy", "Leaderboard", 0], ["library", "library", "Library", 0], ["jobs", "jobs", "Team jobs", jobs]].map(([r, ic, t, n]) => `<li><a href="#/${r}" data-route="${r}">${icon(ic)}<span class="nm">${t}</span>${n ? `<span class="count ${r === "inbox" ? "warn" : ""}">${n}</span>` : ""}</a></li>`).join("");
   sidebarActive();
@@ -175,13 +230,13 @@ function forgeScreen() {
       </div>
       <div class="belt" role="group" aria-label="Tools. Drag onto the core, or click to add.">${work.map(tool).join("")}${forge.more ? extra.map(tool).join("") : extra.length ? `<button type="button" class="tool ghost" data-act="more-tools">${icon("more")}<span>More</span></button>` : ""}</div>
     </div>
-    ${target ? `<div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${forge.caps.length ? "" : "disabled"}>Add to ${esc(target.name)}</button></div>` : `<div class="ask-box">
+    ${target ? `<p class="note">Adding tools resets this agent to asks first. Pending tasks must be restarted.</p><div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${forge.caps.length ? "" : "disabled"}>Add to ${esc(target.name)}</button></div>` : `<div class="ask-box">
       <label class="sr-only" for="forge-text">What should it do?</label>
       <textarea id="forge-text" data-draft="forge-text" rows="1" placeholder="What should it do?">${esc(forge.text)}</textarea>
       <div class="ideas">${ideas.slice(0, 3).map(t => `<button type="button" class="idea" data-act="idea" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>
       <div class="ask-row">
         <label class="pill-select"><span class="sr-only">Model</span><select data-draft="forge-mode">${opts(S["model-profiles"].map(m => [m.id, m.id === "demo" ? "Demo model" : m.name + (m.enabled ? "" : " (needs key)"), !m.enabled]), forge.mode)}</select></label>
-        <label class="name-field"><span class="sr-only">Name</span><input data-draft="forge-name" value="${esc(forge.name)}" placeholder="Name: ${esc(callsign())}" maxlength="40"></label>
+        <label class="name-field"><span class="sr-only">Name</span><input data-draft="forge-name" value="${esc(forge.name)}" placeholder="Name (optional)" maxlength="100"></label>
         <button class="btn primary" data-act="create" ${canHire() ? "" : "disabled"}>Create agent</button>
       </div>
     </div>`}
@@ -215,7 +270,7 @@ function askBlock(a, standalone = false) {
   const ag = agentById(a.agent_id), mine = a.assigned_manager_id === user || S.me.roles.includes("admin"), open = ui.revise[a.id];
   return `<div class="ask ${standalone ? "standalone" : ""}">
     ${standalone ? `<a class="who" href="#/agent/${esc(a.agent_id)}">${orb(a.agent_id, { size: 22, level: ag?.level })}${esc(ag?.name || "Agent")}</a>` : ""}
-    <p class="ask-q">I'd like to <b>${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)}</b>. Okay to go ahead?</p>
+    <p class="ask-q"><b>${esc(a.action.summary || "Review this proposed action.")}</b> Okay to go ahead?</p>
     ${preview(a)}
     <form class="decide" data-form="decide" data-id="${esc(a.id)}">
       ${open ? `<input name="comment" placeholder="What should change?" aria-label="What should change" required>` : ""}
@@ -262,16 +317,13 @@ function artifactView(runId, x) {
   if (r.documents) return `<blockquote class="source"><b>Sample help documents</b>${r.documents.map(d => `<p>${esc(d.title)}</p>`).join("")}</blockquote>`;
   return "";
 }
-/* What the agent "says" around its results. Written by the UI from the run state (see docs/BACKEND-NOTES.md). */
+/* Task answers and action summaries come from persisted backend records. */
 function narrate(r, arts) {
   if (r.status === "queued" || r.status === "running") return `<p class="thinking">${arts.length ? "Working on the next step" : "Thinking"}</p>`;
-  if (r.status === "awaiting_approval") return "";
-  if (r.status === "failed") return `<p class="err">${esc(r.error || "I stopped before finishing.")}</p>`;
+  if (r.status === "failed") return `<p class="err">${esc(r.error || "Stopped before finishing.")}</p>`;
   if (r.status === "cancelled") return `<p class="note">Stopped.</p>`;
-  if (r.result?.answer) return "";
-  const made = arts.map(x => x.result?.kind).filter(Boolean);
-  const parts = [made.includes("analysis") && "analyzed your data", made.includes("slideshow") && "built the slideshow", made.includes("document") && "wrote the document", made.includes("page") && "read the page"].filter(Boolean);
-  return parts.length ? `<p>Done. I ${parts.join(", ").replace(/, ([^,]*)$/, " and $1")}.</p>` : `<p>Done.</p>`;
+  if (r.status === "completed" && !r.result?.answer) return `<p class="note">${esc(r.result?.summary || "Task complete.")}</p>`;
+  return "";
 }
 const KIND = { planner: "Plan", plan: "Plan", model: "Think", tool: "Run", gate: "Ask", approval: "Ask", decision: "Review", revision: "Revise", answer: "Answer", error: "Error" };
 function agentTurn(r, a) {
@@ -287,9 +339,11 @@ function agentTurn(r, a) {
     ${!TERMINAL.includes(r.status) ? `<button class="link-btn" data-act="cancel" data-id="${esc(r.id)}">Stop</button>` : ""}</div>`;
   return html;
 }
+function activeConversation(id) { return (S.conversations[id] || []).at(-1); }
 function followTarget(a, runs) {
-  const last = runs.at(-1);
-  return last && last.status === "completed" && last.mode !== "demo" && !ui.apart[a.id] ? last : null;
+  const conv = activeConversation(a.id);
+  const last = conv ? runs.find(r => r.id === conv.last_run_id) : null;
+  return last && last.status === "completed" && last.mode !== "demo" ? last : null;
 }
 function chatScreen(id) {
   const a = agentById(id);
@@ -307,12 +361,14 @@ function chatScreen(id) {
       <div class="row">
         <button class="switch" role="switch" aria-checked="${!alone(a)}" data-act="mode" data-id="${esc(a.id)}" data-level="${alone(a) ? "intern" : "associate"}" ${manages ? "" : "disabled"}><span class="track"><span class="thumb"></span></span><span class="lbl">Ask before acting</span></button>
         <details class="menu"><summary aria-label="More options">${icon("more")}</summary><div class="menu-pop">
-          <button data-act="teach" data-id="${esc(a.id)}">Add a tool</button>
+          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button><button data-act="archive" data-id="${esc(a.id)}">Archive agent</button>` : ""}
           ${manages ? `<button data-act="share-agent" data-id="${esc(a.id)}">Share as template</button>` : ""}
-          ${follow ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
+          ${a.status === "active" ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
           <button data-act="perf" data-id="${esc(a.id)}">About this agent</button></div></details>
       </div>
     </header>
+    ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming resets review mode and invalidates pending tasks.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
+    ${ui.archive === id ? `<div class="about"><p>Archive ${esc(a.name)}? Unfinished tasks will stop. Its history will be kept.</p><div class="row"><button class="btn small" data-act="archive-confirm" data-id="${esc(id)}">Archive</button><button class="btn small" data-act="dismiss-agent-edit">Cancel</button></div></div>` : ""}
     ${m ? `<section class="about"><p>${esc(a.job_description)}</p><dl><dt>Instructions</dt><dd>${esc(a.instructions)}</dd><dt>Tools</dt><dd>${caps.flatMap(c => c.tool_contracts).map(t => `${esc(TOOL_VERB[t.name] || t.name)} <span class="note">(${esc(RISK[t.risk] || t.risk)})</span>`).join("<br>")}</dd><dt>Track record</dt><dd>${m.p.approved_actions} of ${m.p.reviewed_actions} actions approved · ${m.p.successful_tasks} of ${m.p.evaluated_tasks} results marked good · ${m.p.completed_runs} of ${m.p.run_count} tasks finished</dd><dt>Team</dt><dd>${esc(deptName(a.department_id))} · managed by ${esc(userName(a.manager_id))}</dd></dl><button class="link-btn" data-act="close-about" data-id="${esc(id)}">Close</button></section>` : ""}
     ${a.status !== "active" ? `<div class="center-msg small"><p>${esc(a.name)} needs its own connection before the first task. Credentials never travel with a template.</p><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Connect and enable</button></div>` : ""}
     ${runs.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${alone(a) ? "It works on its own for reads and saves." : "It asks before every action."}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
@@ -334,7 +390,7 @@ function inboxScreen() {
   return `<div class="page">
     <h1 class="display">${words("Approvals")}</h1>
     <p class="lede">Agents that ask before acting wait here. Each answer covers one action.</p>
-    ${pending.length ? `<div class="list">${pending.map(a => askBlock(a, true)).join("")}</div>` : `<p class="empty-line">Nothing waiting. You're all caught up.</p>`}
+    ${pending.length ? `<div class="list">${pending.map(a => askBlock(a, true)).join("")}</div>` : !drafts.length ? `<p class="empty-line">Nothing waiting. You're all caught up.</p>` : ""}
     ${drafts.length ? `<h2 class="section">Agents waiting to be confirmed</h2><ul class="lines">${drafts.map(p => { const ok = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user); return `<li>${orb(p.id, { size: 26 })}<span><b>${esc(p.spec.name)}</b> <span class="note">${esc(p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(short).join(", "))} · ${esc(userName(p.spec.manager_id))} confirms</span></span><button class="btn small ${ok ? "primary" : ""}" data-act="confirm-draft" data-id="${esc(p.id)}" data-rev="${p.revision}" ${ok ? "" : "disabled"}>Confirm</button></li>`; }).join("")}</ul>` : ""}
     ${past.length ? `<details class="quiet history"><summary>History (${past.length})</summary><ul class="lines">${past.slice().reverse().slice(0, 25).map(a => `<li><span class="dot ${a.status === "approved" ? "ok" : a.status === "rejected" ? "bad" : "warn"}"></span><span><b>${esc(agentById(a.agent_id)?.name || "Agent")}</b> <span class="note">${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)} · ${esc(a.status.replace(/_/g, " "))}</span></span><time>${clock(a.decided_at || a.updated_at || a.created_at)}</time></li>`).join("")}</ul></details>` : ""}
   </div>`;
@@ -410,22 +466,27 @@ function jobItem(w) {
     ${w.outcome ? `<p class="note">Review: ${esc(w.outcome.comment)}</p>` : ""}</section>`;
 }
 
-/* ---------- create flow (the UI chains the existing endpoints; see docs/BACKEND-NOTES.md) ---------- */
+/* ---------- atomic create flow ---------- */
 async function createAgent() {
   const target = forge.target && agentById(forge.target);
-  if (!forge.caps.length && !forge.text.trim()) throw Error("Drag at least one tool onto the core, or describe what it should do.");
-  const chat = await api("recruiter/conversations", "POST", {});
-  const names = forge.caps.map(c => capById(c)?.name).filter(Boolean).join(", ");
-  const body = target
-    ? { message: `Add ${names} to ${target.name}.`, capability_ids: forge.caps, target_agent_id: target.id, mode: "demo", model_profile_id: target.model_profile_id, department_id: target.department_id, manager_id: target.manager_id }
-    : { message: forge.text.trim() || `An agent that can: ${names}.`, department_id: defaultDept(), manager_id: defaultManager(), mode: forge.caps.length ? "demo" : forge.mode, model_profile_id: forge.mode, name: forge.name.trim() || callsign() };
-  if (forge.caps.length && !target) body.capability_ids = forge.caps;
-  const p = (await api(`recruiter/conversations/${chat.id}/messages`, "POST", body)).proposal;
-  const confirmable = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user);
-  if (!confirmable) { forge = forge0(); location.hash = "#/inbox"; return `${p.spec.name} is ready for ${userName(p.spec.manager_id)} to confirm.`; }
-  const a = await api(`recruiter/proposals/${p.id}/confirm`, "POST", { revision: p.revision });
-  forge = forge0(); ui.fresh = target ? null : a.id; location.hash = "#/agent/" + a.id;
-  return target ? `${a.name} learned a new tool. It asks before acting again.` : null;
+  if (!forge.caps.length && !forge.text.trim()) throw Error("Choose a tool or describe the job.");
+  if (target) {
+    const a = await api(`agents/${target.id}/capabilities`, "POST", { capability_ids: forge.caps, expected_spec_version: target.spec_version });
+    forge = forge0(); location.hash = "#/agent/" + a.id;
+    return `${a.name} is ready. New tools ask before acting.`;
+  }
+  const body = { model_profile_id: forge.mode, department_id: defaultDept(), manager_id: defaultManager() };
+  if (forge.caps.length) body.capability_ids = forge.caps;
+  if (forge.text.trim()) body.description = forge.text.trim();
+  if (forge.name.trim()) body.name = forge.name.trim();
+  const result = await api("agents/quick-create", "POST", body);
+  forge = forge0();
+  if (result.status === "awaiting_confirmation") {
+    location.hash = "#/inbox";
+    return `${result.proposal.spec.name} is waiting for ${userName(result.proposal.spec.manager_id)} to confirm.`;
+  }
+  ui.fresh = result.agent.id; location.hash = "#/agent/" + result.agent.id;
+  return null;
 }
 
 /* ---------- events ---------- */
@@ -447,7 +508,11 @@ document.addEventListener("click", e => {
   if (kind === "teach") { b.closest("details")?.removeAttribute("open"); forge = { ...forge0(), target: id }; location.hash = "#/new"; render(); }
   if (kind === "mode") { const a = agentById(id); if (a) act(async () => { await api(`agents/${id}/level`, "POST", { level: b.dataset.level, reason: "Switched from the agent page." }); return b.dataset.level === "intern" ? `${a.name} will ask before every action.` : `${a.name} now works on its own for reads and saves.`; }, b); }
   if (kind === "example") { ui.drafts[id] = b.dataset.text; render(); const t = $("[data-draft='run']"); if (t) { grow(t); t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
-  if (kind === "new-thread") { b.closest("details")?.removeAttribute("open"); ui.apart[id] = true; render(); toast("Your next message starts a new conversation."); }
+  if (kind === "new-thread") act(async () => { await api(`agents/${id}/conversations`, "POST", {}); return "Your next message starts a new conversation."; }, b);
+  if (kind === "rename") { ui.rename = id; ui.archive = null; render(); }
+  if (kind === "archive") { ui.archive = id; ui.rename = null; render(); }
+  if (kind === "dismiss-agent-edit") { ui.rename = null; ui.archive = null; render(); }
+  if (kind === "archive-confirm") act(async () => { await api(`agents/${id}`, "DELETE"); ui.archive = null; location.hash = "#/new"; return "Agent archived. History kept."; }, b);
   if (kind === "revise") { ui.revise[id] = !ui.revise[id]; ui.stick = false; render(); ui.stick = true; $(`form[data-id="${id}"] input`)?.focus(); }
   if (kind === "slide") { ui.slide[b.dataset.run] = Math.max(0, Number(b.dataset.to)); ui.stick = false; render(); ui.stick = true; }
   if (kind === "copy") navigator.clipboard?.writeText(b.dataset.text).then(() => toast("Copied."), () => toast("Couldn't copy. Select the text instead.", true));
@@ -489,13 +554,15 @@ document.addEventListener("submit", e => {
     if (!d.task.trim()) return;
     act(async () => {
       const body = { task: d.task, mode: d.mode, max_steps: 8 };
+      const conv = activeConversation(a.id);
+      if (conv) body.conversation_id = conv.id;
       if (follow && follow.mode === d.mode) body.follow_up_of = follow.id;
       await api(`agents/${a.id}/runs`, "POST", body);
-      if (follow && !body.follow_up_of) ui.apart[a.id] = true; else if (!follow) delete ui.apart[a.id];
       ui.drafts[a.id] = "";
       return null;
     }, sub);
   }
+  if (kind === "rename") act(async () => { const a = agentById(f.dataset.id); await api(`agents/${a.id}`, "PATCH", { name: d.name, expected_spec_version: a.spec_version }); ui.rename = null; return "Name saved."; }, sub);
   if (kind === "decide") act(async () => { await api(`approvals/${f.dataset.id}/decision`, "POST", d); delete ui.revise[f.dataset.id]; return { approve: null, reject: "Okay. That action won't run.", request_revision: "Sent back. It will propose something new." }[d.decision]; }, sub);
   if (kind === "install") act(async () => { const r = await api(`marketplace/${f.dataset.id}/install`, "POST", { department_id: defaultDept(), manager_id: defaultManager() }); location.hash = "#/agent/" + r.resource.id; return "Installed. Connect it before its first task."; }, sub);
   if (kind === "new-cap") act(async () => { const tools = new FormData(f).getAll("tools"); if (!tools.length) throw Error("Choose at least one action."); await api("capabilities", "POST", { name: d.name, description: d.description, tools }); return "Tool added to the Library."; }, sub);
@@ -519,10 +586,10 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") { $$("details.menu[open]").forEach(d => d.removeAttribute("open")); document.body.classList.remove("side-open"); }
 });
 document.addEventListener("click", e => { $$("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.removeAttribute("open"); }); });
-$("#identity").addEventListener("change", e => { user = e.target.value; sessionStorage.setItem("dev-user", user); forge = forge0(); S.steps = {}; act(async () => `Signed in as ${userName(user)}.`); });
+$("#identity").addEventListener("change", e => { user = e.target.value; sessionStorage.setItem("dev-user", user); forge = forge0(); S.steps = {}; S.conversations = {}; activityConnection?.controller.abort(); activityConnection = null; act(async () => `Signed in as ${userName(user)}.`); });
 $("#menu-btn").addEventListener("click", () => document.body.classList.toggle("side-open"));
 $("#scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
-addEventListener("hashchange", async () => { document.body.classList.remove("side-open"); if (route().name === "agent") await loadSteps().catch(() => {}); render(); enter(); if (route().name !== "agent") scrollTo({ top: 0 }); });
+addEventListener("hashchange", async () => { document.body.classList.remove("side-open"); if (route().name === "agent") await loadSteps().catch(() => {}); syncActivityStream(); render(); enter(); if (route().name !== "agent") scrollTo({ top: 0 }); });
 
 /* ---------- sky: a planet's horizon catching first light. One canvas; it breathes slowly. ---------- */
 function startSky() {
@@ -573,7 +640,7 @@ function startSky() {
   const active = S.runs?.some(r => !TERMINAL.includes(r.status));
   setTimeout(async () => {
     const el = document.activeElement, typing = ["INPUT", "TEXTAREA", "SELECT"].includes(el?.tagName) && el.value;
-    if (!busy && !document.hidden && !typing && !$("details.menu[open]") && route().name !== "new") {
+    if (!busy && !document.hidden && !typing && !$("details.menu[open]") && route().name !== "agent") {
       try {
         const snap = () => JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, S["work-queue"], Object.values(S.steps).map(s => s.updated)]);
         const before = snap(); await load();
@@ -581,5 +648,5 @@ function startSky() {
       } catch { /* retry next tick */ }
     }
     poll();
-  }, active ? 1200 : 4000);
+  }, route().name === "agent" ? 30000 : active ? 2000 : 6000);
 })();

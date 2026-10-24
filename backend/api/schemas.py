@@ -113,6 +113,7 @@ class RunCreate(Input):
     mode: Mode = "demo"
     max_steps: Annotated[int, Field(ge=1, le=20)] = 8
     follow_up_of: Text | None = None
+    conversation_id: Text | None = None
 
 
 class ReviewDecision(Input):
@@ -144,3 +145,23 @@ class ErrorInfo(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorInfo
+
+
+class QuickCreate(Input):
+    capability_ids: Annotated[list[Text], Field(min_length=1, max_length=10)] | None = None
+    description: LongText | None = None
+    name: Text | None = None
+    model_profile_id: Mode = "demo"
+    department_id: Text | None = None
+    manager_id: Text | None = None
+
+    @model_validator(mode="after")
+    def needs_job(self):
+        if not self.capability_ids and not self.description:
+            raise ValueError("Choose capabilities or describe the job")
+        return self
+
+
+class AgentCapabilities(Input):
+    expected_spec_version: Annotated[int, Field(ge=1)]
+    capability_ids: Annotated[list[Text], Field(min_length=1, max_length=10)]

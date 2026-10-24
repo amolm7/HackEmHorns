@@ -1,7 +1,7 @@
 from uuid import UUID
 from fastapi import APIRouter
 from .common import Context, IdempotentContext
-from .schemas import Empty, RecruiterMessage, ProposalConfirm, AgentPatch
+from .schemas import Empty, RecruiterMessage, ProposalConfirm, AgentPatch, QuickCreate, AgentCapabilities
 
 router = APIRouter(prefix="/api", tags=["Recruiter & workforce"])
 
@@ -42,8 +42,23 @@ def confirm_proposal(
 
 @router.get("/agents")
 def agents(
-    ctx: Context, department_id: str | None = None, manager_id: str | None = None
+    ctx: Context, department_id: str | None = None, manager_id: str | None = None, include_archived: bool = False
 ) -> list[dict]:
+    return ctx.dispatch()
+
+
+@router.post("/agents/quick-create")
+def quick_create(body: QuickCreate, ctx: IdempotentContext) -> dict:
+    return ctx.dispatch(body)
+
+
+@router.post("/agents/{agent_id}/capabilities")
+def add_capabilities(agent_id: UUID, body: AgentCapabilities, ctx: IdempotentContext) -> dict:
+    return ctx.dispatch(body)
+
+
+@router.delete("/agents/{agent_id}")
+def archive_agent(agent_id: UUID, ctx: Context) -> dict:
     return ctx.dispatch()
 
 

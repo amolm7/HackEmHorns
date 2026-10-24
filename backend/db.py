@@ -6,6 +6,7 @@ from .contracts import Error, uid, now
 
 TABLES = {
     "work_items",
+    "agent_conversations",
     "users",
     "departments",
     "capabilities",

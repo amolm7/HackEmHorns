@@ -157,6 +157,7 @@ def decide(c, actor, id, data):
 def level(c, actor, id, data):
     agent = get(c, "agents", id)
     manage(actor, agent)
+    require(agent["status"] != "archived", "Archived agents cannot change autonomy.", 409)
     target = data.get("level")
     require(
         target in ["intern", "associate"], "MVP supports intern and associate only."
@@ -249,7 +250,7 @@ def outcome(c, actor, id, data):
 def leaderboard(c, actor):
     rows = []
     for a in all_rows(c, "agents"):
-        if a["org_id"] != actor["org_id"]:
+        if a["org_id"] != actor["org_id"] or a["status"] == "archived":
             continue
         try:
             visible_agent(actor, a)

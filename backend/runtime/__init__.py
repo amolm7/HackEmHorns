@@ -4,9 +4,34 @@ import time
 from ..contracts import *
 from ..db import *
 from ..registry import capability, resolve, TOOLS
-from . import model, demo
+from . import model, demo, conversations
 
 TERMINAL = {"completed", "failed", "cancelled"}
+
+
+def action_summary(tool, arguments):
+    labels = {
+        "create_slideshow": "Save a slideshow", "create_document": "Save a document",
+        "analyze_data": "Analyze your data", "read_url": "Read a web page",
+        "search_tickets": "Search support tickets", "search_docs": "Search help documents",
+        "create_draft": "Save a reply draft (not send it)",
+    }
+    label = labels.get(tool["name"], tool["description"].strip().rstrip("."))
+    title = arguments.get("title")
+    return label + (f": {title[:100]}" if title else ".")
+
+
+def demo_answer(c, run):
+    tools = [s["label"] for s in all_rows(c, "steps") if s["run_id"] == run["id"] and s["kind"] == "tool"]
+    labels = {
+        "create_slideshow": "saved a slideshow", "create_document": "saved a document",
+        "analyze_data": "analyzed the supplied table", "read_url": "checked the supplied web page",
+        "search_tickets": "searched sample tickets", "search_docs": "searched sample help documents",
+        "create_draft": "saved a reply draft",
+    }
+    parts = list(dict.fromkeys(labels.get(t, "ran " + t) for t in tools))
+    completed = "; ".join(parts) if parts else "ran no tools"
+    return "Demo complete: " + completed + ". Outputs stay in the workspace; nothing was sent. No AI model was called."
 
 
 def add_step(c, run, kind, label, data):
@@ -56,7 +81,7 @@ def policy(c, actor, agent, action):
                     "connection_id",
                     "capability_id",
                     "capability_version",
-                ]
+                ] + (["summary"] if "summary" in action else [])
             }
         ),
         "Action snapshot changed. Start a new run.",
@@ -128,25 +153,17 @@ def start(c, app, actor, agent_id, data):
     limit = data.get("max_steps", 8)
     require(type(limit) is int and 1 <= limit <= 20, "max_steps must be 1–20.")
     task = string(data.get("task"), "task", 4000)
-    run_id, thread_id, contents = uid(), None, []
+    run_id, contents = uid(), []
+    conv, earlier = conversations.attach(c, actor, agent, data, run_id)
     if data.get("follow_up_of"):
-        # A follow-up continues the earlier live conversation, so the agent remembers what it just did.
-        earlier = get(c, "runs", data["follow_up_of"])
-        in_org(actor, earlier)
-        require(earlier["agent_id"] == agent_id, "Follow-ups must stay with the same agent.")
-        require(
-            mode != "demo" and earlier["mode"] == mode,
-            "Follow-up questions need a live model, the same one as the earlier task.",
-            409,
-            "follow_up_unavailable",
-        )
-        require(earlier["status"] == "completed", "Ask a follow-up after the earlier task finishes.", 409)
+        require(mode != "demo", "Follow-up questions need a live model.", 409, "follow_up_unavailable")
+    if earlier and mode != "demo":
         require(len(json.dumps(earlier["contents"])) < 60000, "This conversation is too long. Start a new one.", 409)
-        thread_id = earlier.get("thread_id", earlier["id"])
         contents = earlier["contents"] + [{"role": "user", "parts": [{"text": task}]}]
     run = {
         "id": run_id,
-        "thread_id": thread_id or run_id,
+        "thread_id": conv["id"],
+        "conversation_id": conv["id"],
         "org_id": actor["org_id"],
         "agent_id": agent_id,
         "agent_name": agent["name"],
@@ -393,6 +410,7 @@ class Runtime:
                     run.update(
                         status="completed",
                         result={
+                            "answer": demo_answer(c, run),
                             "summary": "Demo workflow completed. Inspect actual tool results below. No language model was called.",
                             "tool_results": run["batch_responses"],
                         },
@@ -536,6 +554,7 @@ class Runtime:
                     ),
                     "Tool arguments do not match its schema.",
                 )
+                pending["summary"] = action_summary(item["tool"], pending["arguments"])
                 pending["snapshot_hash"] = digest(
                     {
                         k: pending[k]
@@ -549,6 +568,7 @@ class Runtime:
                             "connection_id",
                             "capability_id",
                             "capability_version",
+                            "summary",
                         ]
                     }
                 )

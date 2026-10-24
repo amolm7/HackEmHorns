@@ -66,11 +66,11 @@ class FastAPITransportTests(unittest.TestCase):
         schema = response.json()
         self.assertEqual(
             sum(
-                method in ["get", "post", "patch"]
+                method in ["get", "post", "patch", "delete"]
                 for path in schema["paths"].values()
                 for method in path
             ),
-            45,
+            53,
         )
         run = schema["paths"]["/api/agents/{agent_id}/runs"]["post"]
         self.assertEqual(

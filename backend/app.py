@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 from .contracts import *
 from .db import *
 from . import registry, recruiter, reviews, workqueue
-from .runtime import Runtime, start, public_run, cancel
+from .runtime import Runtime, start, public_run, cancel, conversations
 from .runtime.mcp import MCP
 
 
@@ -43,9 +43,9 @@ class Application:
             idem = method == "POST" and (
                 (
                     len(parts) >= 2
-                    and parts[-1] in ["confirm", "install", "runs", "decision"]
+                    and parts[-1] in ["confirm", "install", "runs", "decision", "quick-create"]
                 )
-                or (len(parts) == 4 and parts[-1] == "outcome")
+                or (len(parts) == 4 and parts[-1] in ["outcome", "capabilities", "conversations"])
             )
             idem_id = None
             if idem:
@@ -236,6 +236,8 @@ class Application:
                 return proposal
             if len(p) == 5 and p[4] == "confirm" and method == "POST":
                 return recruiter.confirm(c, actor, p[3], d)
+        if path == "agents/quick-create" and method == "POST":
+            return recruiter.quick_create(c, self, actor, d)
         if path == "agents" and method == "GET":
             result = []
             for agent in all_rows(c, "agents"):
@@ -247,7 +249,8 @@ class Application:
             return [
                 a
                 for a in result
-                if (
+                if (a["status"] != "archived" or q.get("include_archived") == "true")
+                and (
                     not q.get("department_id")
                     or q["department_id"] == a["department_id"]
                 )
@@ -262,7 +265,27 @@ class Application:
                     return agent
                 if method == "PATCH":
                     return recruiter.patch_agent(c, actor, id, d)
+                if method == "DELETE":
+                    return recruiter.archive(c, actor, id)
             if len(p) == 4:
+                if p[3] == "capabilities" and method == "POST":
+                    return recruiter.add_capabilities(c, self, actor, id, d)
+                if p[3] == "conversations":
+                    if method == "POST":
+                        return conversations.create(c, actor, agent)
+                    if method == "GET":
+                        return conversations.list_for(c, actor, agent)
+                if p[3] == "runs" and method == "GET":
+                    return self.route(c, actor, "GET", ["api", "runs"], {**q, "agent_id": id}, {})
+                if p[3] == "activity" and method == "GET":
+                    runs = self.route(c, actor, "GET", ["api", "runs"], {"agent_id": id}, {})
+                    run_ids = {r["id"] for r in runs}
+                    return {
+                        "agent": agent, "runs": runs,
+                        "steps": [x for x in all_rows(c, "steps") if x["org_id"] == actor["org_id"] and x["run_id"] in run_ids],
+                        "approvals": [x for x in reviews.inbox(c, actor) if x["agent_id"] == id] if set(actor["roles"]) & {"admin", "manager", "auditor"} else [],
+                        "conversations": conversations.list_for(c, actor, agent),
+                    }
                 if p[3] == "versions" and method == "GET":
                     return [
                         v

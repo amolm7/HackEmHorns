@@ -178,3 +178,23 @@ Publish body: `{ "kind": "agent", "source_id": "<agent-id>" }`, or `kind: capabi
 Agent install body: `{ "department_id": "support", "manager_id": "pavan" }`. Returns `install` and `resource`; the agent is an Intern with no bindings. Capability install body `{}` returns an unbound recipe reference and measured install record; the actual capability is already in the same-company catalog and is bound/validated when attached to an agent. Global copies are not implemented.
 
 Nutrition labels show actual validation counts and scope. Each listing retains its original creator separately from its publisher. Installs credit both the listing creator and reused capability creators. Publisher verification and security scanning are `null`; no badge is fabricated. The leaderboard does not calculate money/time savings or cross-company scores.
+
+## UI backend improvements
+
+All new mutation requests below use the existing `X-Dev-User` identity. Quick creation, capability additions, conversation creation, and runs require `Idempotency-Key`. Reuse a key only to retry the same payload.
+
+| Method | Endpoint | Behavior |
+| --- | --- | --- |
+| POST | `/agents/quick-create` | `{capability_ids?, description?, name?, model_profile_id?, department_id?, manager_id?}`. Provide skills or a description. Returns `{status: "created", agent}` for an authorized manager/admin, otherwise `{status: "awaiting_confirmation", proposal}`. Uses the existing proposal validation and confirmation policy atomically. |
+| POST | `/agents/{id}/capabilities` | `{capability_ids, expected_spec_version}`. Manager/admin only; validates connections and resets new authority to asks-first. Returns the versioned agent. |
+| DELETE | `/agents/{id}` | Manager/admin soft archive; cancels unfinished runs and pending approvals. Returns 409 if a tool is executing. Retains audit/history. |
+| GET | `/agents?include_archived=true` | Includes archived records visible under the same organization/department rules. Default excludes archives. |
+| POST | `/agents/{id}/conversations` | `{}` creates a durable, actor-owned task conversation. |
+| GET | `/agents/{id}/conversations` | Lists the caller's task conversations for the visible agent, in creation order. |
+| GET | `/agents/{id}/runs` | Scoped run history, with optional validated `status` filter. |
+| GET | `/agents/{id}/activity` | `{agent, runs, steps, approvals, conversations}` snapshot for a visible agent. Only the caller's authorized approvals and own conversations are included. |
+| GET | `/agents/{id}/events` | Authenticated SSE. `snapshot` events carry the activity snapshot on changes; comments provide heartbeats. `access-lost` closes a stream when access changes. Reconnect after termination for the latest durable snapshot. |
+
+`POST /agents/{id}/runs` additionally accepts `conversation_id`. It continues the latest completed turn in a live conversation, rejects parallel/stale/cross-user or cross-agent continuation, and requires the same model. A new conversation is needed after an unfinished task or to switch models. Legacy `follow_up_of` remains supported. Public runs include `conversation_id` and compatible `thread_id`.
+
+Completed demo runs now include a persisted `result.answer`. New approval actions include `summary` in their immutable hash; old action records retain their existing hash format. Rename remains the existing versioned `PATCH /agents/{id}` operation, including its asks-first reset and pending-run invalidation behavior.

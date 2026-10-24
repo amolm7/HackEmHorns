@@ -89,7 +89,19 @@ def default_name(caps):
         return caps[0].get("agent_name") or caps[0]["name"]
     if all(c.get("group") == "Support sandbox" for c in caps):
         return "Ticket Triage"
-    return "Workspace Assistant"
+    return " & ".join(c.get("agent_name") or c["name"] for c in caps)[:90]
+
+
+def unique_name(c, actor, base):
+    names = {a["name"].casefold() for a in all_rows(c, "agents") if a["org_id"] == actor["org_id"]}
+    names.update(p["spec"]["name"].casefold() for p in all_rows(c, "proposals") if p["org_id"] == actor["org_id"] and p["status"] == "draft")
+    base = string(base, "name", 100)
+    candidate, n = base, 2
+    while candidate.casefold() in names:
+        suffix = f" {n}"
+        candidate = base[:100 - len(suffix)] + suffix
+        n += 1
+    return candidate
 
 
 def default_instructions(caps):
@@ -212,12 +224,12 @@ def message(c, app, actor, id, data):
     target = get(c, "agents", target_id) if target_id else None
     if target:
         manage(actor, target)
+        require(target["status"] != "archived", "Archived agents cannot be changed.", 409)
     spec = {
         **previous,
         "name": data.get("name")
-        or parsed.get("name")
         or previous.get("name")
-        or default_name(chosen),
+        or unique_name(c, actor, parsed.get("name") or default_name(chosen)),
         "job_description": parsed.get("job_description")
         or data.get("job_description")
         or previous.get("job_description")
@@ -252,8 +264,13 @@ def message(c, app, actor, id, data):
     if not missing:
         check_manager(c, actor, spec["department_id"], spec["manager_id"])
         for cap_id in spec["capability_ids"]:
+            existing_connection = next(
+                (b["connection_id"] for b in target["bindings"] if b["capability_id"] == cap_id),
+                None,
+            ) if target else None
             connection_id = (
                 data.get("connection_id")
+                or existing_connection
                 or capability(c, actor, cap_id).get("connection_id")
                 or "support-local"
             )
@@ -329,6 +346,7 @@ def confirm(c, actor, id, data):
     else:
         agent = get(c, "agents", p["target_agent_id"])
         manage(actor, agent)
+        require(agent["status"] != "archived", "Archived agents cannot be changed.", 409)
         require(
             agent["spec_version"] == p["target_spec_version"],
             "Target agent changed. Create a fresh proposal.",
@@ -371,6 +389,7 @@ def patch_agent(c, actor, id, data):
     roles(actor, "admin", "manager", "builder")
     agent = get(c, "agents", id)
     visible_agent(actor, agent)
+    require(agent["status"] != "archived", "Archived agents cannot be changed.", 409)
     require(
         "admin" in actor["roles"]
         or actor["id"] in [agent["creator_id"], agent["manager_id"]],
@@ -447,3 +466,66 @@ def patch_agent(c, actor, id, data):
     )
     audit(c, actor, "agent.spec_changed", id, {"spec_version": new["spec_version"]})
     return new
+
+
+def quick_create(c, app, actor, data):
+    """Use the same validated recruiter policy, in one replay-protected transaction."""
+    conv = conversation(c, actor)
+    payload = {
+        "message": data.get("description") or "Create an agent with the selected capabilities.",
+        "department_id": data.get("department_id") or next(iter(actor["department_ids"]), "support"),
+        "manager_id": data.get("manager_id") or (
+            actor["id"] if set(actor["roles"]) & {"admin", "manager"} else "pavan"
+        ),
+        "model_profile_id": data.get("model_profile_id", "demo"),
+        "mode": "demo" if data.get("capability_ids") else data.get("model_profile_id", "demo"),
+    }
+    for key in ("name", "capability_ids"):
+        if data.get(key):
+            payload[key] = data[key]
+    result = message(c, app, actor, conv["id"], payload)
+    proposal = result["proposal"]
+    can_confirm = "admin" in actor["roles"] or (
+        "manager" in actor["roles"] and proposal["spec"]["manager_id"] == actor["id"]
+    )
+    if not can_confirm:
+        audit(c, actor, "proposal.awaiting_confirmation", proposal["id"], {"manager_id": proposal["spec"]["manager_id"]})
+        return {"status": "awaiting_confirmation", "proposal": proposal}
+    agent = confirm(c, actor, proposal["id"], {"revision": proposal["revision"]})
+    return {"status": "created", "agent": agent}
+
+
+def add_capabilities(c, app, actor, id, data):
+    agent = get(c, "agents", id)
+    manage(actor, agent)
+    require(agent["status"] != "archived", "Archived agents cannot be changed.", 409)
+    require(data.get("expected_spec_version") == agent["spec_version"], "Spec version conflict.", 409, "stale_spec")
+    requested = data.get("capability_ids") or [data.get("capability_id")]
+    require(isinstance(requested, list) and 0 < len(requested) <= 10 and all(isinstance(x, str) for x in requested), "Choose 1–10 capability IDs.")
+    existing = {b["capability_id"] for b in agent["bindings"]}
+    if set(requested) <= existing:
+        return agent
+    conv = conversation(c, actor)
+    result = message(c, app, actor, conv["id"], {
+        "message": "Add the selected capabilities.", "target_agent_id": id,
+        "capability_ids": requested, "mode": "demo",
+    })
+    p = result["proposal"]
+    return confirm(c, actor, p["id"], {"revision": p["revision"]})
+
+
+def archive(c, actor, id):
+    from ..runtime import TERMINAL, cancel
+
+    agent = get(c, "agents", id)
+    manage(actor, agent)
+    if agent["status"] == "archived":
+        return agent
+    # cancel refuses in-flight tool calls. The transaction rolls back all changes on refusal.
+    for run in all_rows(c, "runs"):
+        if run["agent_id"] == id and run["status"] not in TERMINAL:
+            cancel(c, actor, run["id"])
+    agent.update(status="archived", archived_at=now(), updated_at=now())
+    put(c, "agents", agent)
+    audit(c, actor, "agent.archived", id)
+    return agent
