@@ -1,0 +1,17 @@
+# Backend notes from the UI redesign
+
+The October 2026 redesign (one-screen drag-and-drop creator, chat-style agent page, sidebar of agents) changed **only** `static/`. Everything works against the existing API. These are the places where the UI currently works around the backend, roughly in priority order. Nothing here is implemented yet.
+
+| # | What the UI does today | Why it's a workaround | Suggested backend change |
+| --- | --- | --- | --- |
+| 1 | **Creating an agent takes three calls**: `POST /recruiter/conversations`, `POST /recruiter/conversations/{id}/messages` (with `capability_ids`, `name`, model), then `POST /recruiter/proposals/{id}/confirm`. | Slower, and a failure between calls leaves a stray draft proposal. | One endpoint, e.g. `POST /agents/quick-create {capability_ids, description, name, model_profile_id}`, that validates, creates and (when the caller may confirm) confirms in one transaction. Keep the proposal path for people who can't self-confirm. |
+| 2 | **Builders can't finish creating an agent.** If the caller isn't the manager or an admin, the UI sends them to Approvals, where the draft waits for the manager to confirm. | Matches current policy, but it surprises builders in a demo. | Decide the policy: allow builders to self-confirm agents that start in "asks first" mode, or keep it and add a notification. |
+| 3 | **Agent names.** The UI suggests a callsign (Nova, Atlas, …) and always sends `name`, because the backend default is "Workspace Assistant" for any multi-tool agent, so lists fill up with identical names. | Naming logic lives in the UI. | Better defaults in `recruiter.default_name` (unique per org), plus `PATCH /agents/{id}` support for renaming. |
+| 4 | **The agent's reply text in demo mode is written by the UI** ("Done. I analyzed your data, built the slideshow and wrote the document.") from the run's tool steps. Live models return `result.answer`, which the UI shows instead. | The chat would otherwise show results with no words around them. | Have demo runs return a short `result.answer` summarising what ran, so the UI never has to invent text. |
+| 5 | **Approval questions** ("I'd like to build a slideshow. Okay to go ahead?") are phrased by the UI from `action.tool_id`. | Works for the 7 built-in tools only. | Add a human-readable `summary` to each frozen action when the gate is created. |
+| 6 | **Polling.** The chat polls `GET /runs`, `/approvals` and per-run `/steps` every 1.2 to 4 seconds. | Wasteful, and replies don't stream. | Server-sent events or a websocket per agent (run status, steps, approvals), and `GET /agents/{id}/runs` to avoid loading every run. |
+| 7 | **Adding a tool to an existing agent** reuses the recruiter flow with `target_agent_id`, then auto-confirms. | Same three-call chain as #1, and it resets the agent to "asks first". | `POST /agents/{id}/capabilities {capability_id}` with the same validation, and an explicit choice on whether autonomy resets. |
+| 8 | **Conversations** are inferred from `thread_id` on runs; "New conversation" is a UI flag that stops sending `follow_up_of`. | A page reload forgets the flag. | First-class conversations: `POST /agents/{id}/conversations`, runs belong to one. |
+| 9 | **No delete or archive for agents.** | Test agents pile up in the sidebar. | `DELETE /agents/{id}` (soft archive), respecting audit history. |
+
+The UI also no longer needs the extra font route entry for Martian Mono that an earlier draft added; `FONTS` in `backend/api/application.py` is back to Unbounded and Hanken Grotesk.

@@ -1,37 +1,33 @@
-# Design: "Mission control"
+# Design: first light
 
-**Mode:** Operate. People come here to create an agent, give it work and review the result. Expression lives in the details; scanability wins.
+**Mode:** Operate, for people who have never built an agent. Every screen does one thing.
 
-**World:** a dark instrument room. Deep blue-black space, frosted glass panels with a thin lit edge, one slowly turning wireframe globe behind everything, and each agent shown as a small glowing orb with an orbit ring. Calm, precise, a little cinematic.
+**World:** the dark side of a planet at sunrise. One canvas draws a curved horizon with a thin bright rim, a soft sun that slowly breathes, and faint stars. The horizon moves to where it means something: behind the agent core on the creator (the core sits in the sunrise), low behind the message box in a chat, at the bottom of other pages. Almost nothing is boxed: content sits directly on the sky, separated by space and hairlines.
 
-## Tokens (see `static/style.css`)
+Reference for the motion and type: the cinematic hero, heavy uppercase display and blur-in reveals of rayhanm.com, adapted for an app. No assets are copied; the sky is drawn in code.
+
+## Structure
+
+- **Sidebar** (like a list of conversations): New agent, your agents (orb + name + a dot when one is working or waiting for you), then Approvals, Leaderboard, Library, Team jobs, and the dev identity switcher.
+- **Creator** (`#/new`): drag tools onto the core (or click them), say what it should do, pick a model, Create agent. One screen, one button. The tools land in orbit around the core.
+- **Agent** (`#/agent/:id`): a chat. You type, it answers. Approvals appear inside the conversation as a question ("I'd like to build a slideshow. Okay to go ahead?") with Go ahead / Change something / Don't. Results (slides, documents, charts, sources) appear inline. Steps and ratings sit quietly under each reply.
+
+## Tokens (`static/style.css`)
 
 | Role | Value |
 | --- | --- |
-| Space | `#05070d` base, `#0a1020` raised |
-| Glass | `rgba(16, 24, 44, .62)` with a 1px edge `rgba(160, 190, 255, .14)` |
-| Ink | `#e8eefc` / `#a9b6d3` / `#7886a9` |
-| Signal (the one accent) | `#4ff0c8` mint |
-| Attention | `#ffb454` amber (needs you), `#ff6b81` coral (stop / failed) |
-| Display type | Unbounded (variable), used for headings only, never above 2rem |
-| Body type | Hanken Grotesk (variable) |
+| Void | `#02040a` |
+| Ink / dim / faint | `#eef2fb` / `#a2adc4` / `#66728c` |
+| Ice (live, light, focus) | `#bfefff` |
+| Waiting for a person | `#ffc073` amber |
+| Primary button | solid white pill on the dark sky |
+| Display | Unbounded, uppercase, for page titles only |
+| Body | Hanken Grotesk |
 
-Fonts are self-hosted from `static/fonts` (SIL OFL licences alongside) because the CSP allows only same-origin resources. Monospace is reserved for raw data and code.
+## Motion
 
-## Rules
-
-- One accent. Mint means "go / alive / yours". Amber means "waiting for a human". Nothing else is coloured for decoration.
-- Glass is used where it carries depth (panels over the globe). No gradient text, no nested cards, no icon-tile-heading page structure.
-- Icons are authored SVG at one stroke weight (`icon()` in `app.js`).
-- Depth: the globe, a gentle 3D tilt on pointer hover for cards (fine pointers only), soft offset shadows.
-
-## Motion thesis
-
-- **Focal moment:** a new agent's orb *ignites* once, when you land on its page after creating it (ring sweeps in, glow blooms, 700 ms).
-- **Continuity:** screens rise 8 px and fade in (240 ms, exponential ease-out) on navigation only, never on background refreshes. Card grids stagger by 30 ms.
-- **Feedback:** buttons press to 0.97; the autonomy switch re-lights its orb ring.
-- **Budget:** one canvas, paused when the tab is hidden or the user prefers reduced motion (a still frame is drawn instead). Only `transform` and `opacity` animate.
-
-## Product language
-
-An agent **asks first** (every action needs approval) or **runs alone** (reads and local saves proceed; actions with outside effects still ask). The leaderboard ranks agents by what managers actually did: results they rated as successful, and actions they approved.
+- **Focal moment:** headlines blur into focus word by word (1s, 70ms stagger, `cubic-bezier(.16,1,.3,1)`); the rest of the screen rolls in behind them, blurred to sharp.
+- **Creator:** the core's halo breathes; while you drag, it speeds up and the ring tightens; a dropped tool lands in orbit (blur, scale up) and the core flashes as it absorbs it.
+- **Chat:** "Thinking" shimmers while the agent works; a new agent's orb ignites once.
+- **Ambient:** the sun breathes on an 18s cycle, stars twinkle, the horizon glides between positions when you change screens.
+- **Budget:** one canvas, paused when the tab is hidden. Reduced motion draws one still frame and removes every animation and blur.

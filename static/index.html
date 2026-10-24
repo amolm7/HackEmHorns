@@ -11,25 +11,19 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
+<canvas id="sky" aria-hidden="true"></canvas>
 <a class="skip" href="#view">Skip to content</a>
-<header class="topbar">
-  <a class="brand" href="#/work" aria-label="Hire an Agent, home">
-    <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true"><rect width="32" height="32" rx="11" fill="#277dff"/><path d="M10 17c0-8 12-8 12 0v5H10z" fill="#fff"/><circle cx="14" cy="17" r="1.2" fill="#277dff"/><circle cx="19" cy="17" r="1.2" fill="#277dff"/></svg>
-    <span>Hire an Agent</span>
-  </a>
-  <nav aria-label="Main"><ul class="menu" id="menu">
-    <li><a href="#/work" data-route="work"><svg class="ic" aria-hidden="true"></svg>Home</a></li>
-    <li><a href="#/agents" data-route="agents"><svg class="ic" aria-hidden="true"></svg>Agents</a></li>
-    <li><a href="#/inbox" data-route="inbox"><svg class="ic" aria-hidden="true"></svg>Approvals <span class="badge" id="menu-queue" hidden></span></a></li>
-    <li><a href="#/library" data-route="library"><svg class="ic" aria-hidden="true"></svg>Library</a></li>
-  </ul></nav>
-  <div class="who-box">
-    <a class="btn primary small" href="#/create" id="create-top"></a>
-    <label class="identity"><span class="sr-only">Signed in as (local development identity)</span><select id="identity"></select></label>
-  </div>
-</header>
-<main id="view"><p class="muted loading">Connecting…</p></main>
-<footer class="footer"><span>Local demo workspace</span><a href="/docs">API docs ↗</a></footer>
+<aside class="side" id="side" aria-label="Agents and pages">
+  <a class="brand" href="#/new"><span class="brand-dot" aria-hidden="true"></span>Hire an Agent</a>
+  <a class="new-agent" id="new-agent" href="#/new"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New agent</a>
+  <p class="side-label">Agents</p>
+  <ul class="side-list" id="agent-list"></ul>
+  <ul class="side-list links" id="side-links"></ul>
+  <label class="identity"><span class="sr-only">Signed in as (local development identity)</span><select id="identity"></select></label>
+</aside>
+<button class="menu-btn" id="menu-btn" aria-label="Open menu" aria-controls="side"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg></button>
+<div class="scrim" id="scrim"></div>
+<main id="view"><p class="loading">Connecting…</p></main>
 <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>
