@@ -2,6 +2,10 @@
 
 > Describe the job. Hire the agent. Let it earn trust.
 
+## Current implementation status
+
+The four backend work areas are now implemented in `backend/registry`, `backend/runtime`, `backend/reviews`, and `backend/recruiter`, with explicit FastAPI routers and Pydantic request validation, SQLite persistence, Meta/Gemini adapters, and a deliberately basic frontend. See `README.md`, `docs/API.md`, and `docs/IMPLEMENTATION.md` for the actual contract and limits. The local sandbox workflow is verified; live provider verification requires a configured key. The sections below retain the agreed product plan and ownership breakdown.
+
 ## 1. Concept
 
 An enterprise agent platform that combines employee-style onboarding with a company marketplace of reusable capabilities. Users describe a job to a Recruiter helper. It proposes an agent with a department, manager, instructions, tools, and explicit permissions. A human reviews the job card and hires the agent as an Intern. The agent starts with supervised work and can be manually promoted as its manager reviews real results.
@@ -10,7 +14,7 @@ Teams publish reusable capability recipes and agent templates internally. Other 
 
 **Why this product:** Teams should not rebuild the same capabilities or give new agents unrestricted autonomy. Hire from shared company expertise, then expand autonomy through reviewed work.
 
-**Project reset:** This document replaces the previous Proof/document-research prototype and its plan. The earlier implementation has been removed from the repository. This is a design and implementation plan, not a statement that the features below already exist.
+**Project reset:** This document replaces the previous Proof/document-research prototype and its plan. The earlier implementation has been removed from the repository. This is the product plan; use the current implementation status and handoff docs to distinguish implemented MVP features from roadmap items.
 
 ## 2. People and agent authority
 
