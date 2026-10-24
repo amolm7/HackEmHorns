@@ -6,6 +6,7 @@ from html.parser import HTMLParser
 import io
 import ipaddress
 import json
+import math
 import re
 import secrets
 import socket
@@ -47,9 +48,11 @@ def parse_outline(text):
 def number(value):
     cleaned = value.strip().replace(",", "").replace("$", "").replace("%", "")
     try:
-        return float(cleaned)
+        parsed = float(cleaned)
     except ValueError:
         return None
+    require(math.isfinite(parsed), "Table numbers must be finite; NaN and infinity are not supported.")
+    return parsed
 
 
 def analyze_table(text, question=""):
@@ -59,18 +62,24 @@ def analyze_table(text, question=""):
     delimiter = "\t" if "\t" in first and "," not in first else ";" if ";" in first and "," not in first else ","
     rows = [r for r in csv.reader(io.StringIO(text), delimiter=delimiter) if any(c.strip() for c in r)]
     require(len(rows) >= 2, "The table needs a header row and at least one data row.")
-    header = [h.strip() or f"column {i + 1}" for i, h in enumerate(rows[0][:30])]
-    body = [r[: len(header)] + [""] * (len(header) - len(r)) for r in rows[1:501]]
+    require(len(rows[0]) <= 30, "Tables support at most 30 columns.")
+    require(len(rows) <= 501, "Tables support at most 500 data rows.")
+    header = [h.strip() or f"column {i + 1}" for i, h in enumerate(rows[0])]
+    require(len(set(header)) == len(header), "Table column names must be unique.")
+    require(all(len(r) <= len(header) for r in rows[1:]), "A data row has more cells than the header.")
+    body = [r + [""] * (len(header) - len(r)) for r in rows[1:]]
     columns, numeric, categories = [], {}, {}
     for i, name in enumerate(header):
         values = [r[i].strip() for r in body if r[i].strip()]
         nums = [number(v) for v in values]
         if values and all(n is not None for n in nums):
+            total = sum(nums)
+            require(math.isfinite(total), "Table totals exceed the supported numeric range.")
             columns.append({"name": name, "type": "number"})
             numeric[name] = {
                 "count": len(nums),
-                "sum": round(sum(nums), 2),
-                "mean": round(sum(nums) / len(nums), 2),
+                "sum": round(total, 2),
+                "mean": round(total / len(nums), 2),
                 "min": min(nums),
                 "max": max(nums),
             }
@@ -93,14 +102,17 @@ def analyze_table(text, question=""):
                 continue
             label = r[li].strip() if li is not None and r[li].strip() else f"Row {n + 1}"
             totals[label] = round(totals.get(label, 0) + value, 2)
+            require(math.isfinite(totals[label]), "Table group totals exceed the supported numeric range.")
         points = [{"label": k, "value": v} for k, v in list(totals.items())[:12]]
         chart = {"type": "bar", "x": label_col or "Row", "y": value_col, "points": points}
         if points:
-            top = max(points, key=lambda p: p["value"])
-            low = min(points, key=lambda p: p["value"])
-            highlights.append(f"Highest {value_col}: {top['label']} ({top['value']:g})")
-            if low["label"] != top["label"]:
-                highlights.append(f"Lowest {value_col}: {low['label']} ({low['value']:g})")
+            top = max(totals, key=totals.get)
+            low = min(totals, key=totals.get)
+            highlights.append(f"Highest {value_col}: {top} ({totals[top]:g})")
+            if low != top:
+                highlights.append(f"Lowest {value_col}: {low} ({totals[low]:g})")
+            if len(totals) > len(points):
+                highlights.append(f"Chart shows the first {len(points)} of {len(totals)} groups; statistics include all rows.")
         highlights.append(f"Total {value_col}: {numeric[value_col]['sum']:g} across {numeric[value_col]['count']} rows")
     return {
         "kind": "analysis",

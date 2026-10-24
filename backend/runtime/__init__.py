@@ -428,6 +428,19 @@ class Runtime:
                 run = get(c, "runs", id)
                 if run["status"] in TERMINAL:
                     return
+                # Provider calls release the database lock. Recheck the current
+                # spec and access before accepting either an answer or tool calls.
+                agent = get(c, "agents", run["agent_id"])
+                actor = get(c, "users", run["actor_id"])
+                visible_agent(actor, agent)
+                require(
+                    agent["spec_version"] == run["spec_version"],
+                    "Agent changed during this run; start a new run.",
+                    409,
+                    "stale_spec",
+                )
+                require(agent["status"] == "active", "Agent is not active.", 409)
+                allowed_tools(c, actor, agent)
                 run["model_turns"] += 1
                 run["contents"].append(content)
                 run["usage"]["input_tokens"] += usage.get("promptTokenCount", 0)
