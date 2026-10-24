@@ -24,8 +24,18 @@ class CapabilityCreate(Input):
     name: Text
     description: Annotated[str, Field(min_length=1, max_length=1000)]
     tools: Annotated[
-        list[Literal["search_tickets", "search_docs", "create_draft"]],
-        Field(min_length=1, max_length=3),
+        list[
+            Literal[
+                "search_tickets",
+                "search_docs",
+                "create_draft",
+                "create_slideshow",
+                "create_document",
+                "analyze_data",
+                "read_url",
+            ]
+        ],
+        Field(min_length=1, max_length=7),
     ]
 
 
@@ -61,7 +71,7 @@ class RecruiterMessage(Input):
     manager_id: Text | None = None
     mode: Mode = "demo"
     model_profile_id: Mode | None = None
-    connection_id: Text = "support-local"
+    connection_id: Text | None = None
     capability_ids: Annotated[list[Text], Field(min_length=1, max_length=10)] | None = (
         None
     )
@@ -102,6 +112,7 @@ class RunCreate(Input):
     task: LongText
     mode: Mode = "demo"
     max_steps: Annotated[int, Field(ge=1, le=20)] = 8
+    follow_up_of: Text | None = None
 
 
 class ReviewDecision(Input):

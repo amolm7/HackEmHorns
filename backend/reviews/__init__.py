@@ -260,6 +260,12 @@ def leaderboard(c, actor):
                     p["approval_rate"] if p["reviewed_actions"] >= 5 else None
                 ),
                 "eligible": p["reviewed_actions"] >= 5,
+                "rated_tasks": p["evaluated_tasks"],
+                "successful_tasks": p["successful_tasks"],
+                "task_success_rate": (
+                    p["task_success_rate"] if p["evaluated_tasks"] >= 3 else None
+                ),
+                "result_eligible": p["evaluated_tasks"] >= 3,
             }
         )
     rows.sort(key=lambda x: (x["eligible"], x["approval_rate"] or 0), reverse=True)
@@ -291,8 +297,26 @@ def leaderboard(c, actor):
                     )
                     + 1,
                 }
+    usage = {}
+    for a in all_rows(c, "agents"):
+        if a["org_id"] != actor["org_id"] or a["status"] != "active":
+            continue
+        try:
+            visible_agent(actor, a)
+        except Error:
+            continue
+        for b in a["bindings"]:
+            usage.setdefault(b["capability_id"], set()).add(a["id"])
+    capability_usage, creator_usage = [], {}
+    for cap_id, agent_ids in usage.items():
+        cap = get(c, "capabilities", cap_id)
+        capability_usage.append(
+            {"capability_id": cap_id, "creator_id": cap["creator_id"], "agents": len(agent_ids)}
+        )
+        creator_usage[cap["creator_id"]] = creator_usage.get(cap["creator_id"], 0) + len(agent_ids)
     return {
         "minimum_reviewed_actions": 5,
+        "minimum_rated_tasks": 3,
         "agents": rows,
         "publisher_reuse": [
             {"publisher_id": id, "installations": n}
@@ -305,5 +329,10 @@ def leaderboard(c, actor):
         "capability_reuse": sorted(
             capability_reuse.values(), key=lambda x: -x["installations"]
         ),
+        "capability_usage": sorted(capability_usage, key=lambda x: -x["agents"]),
+        "creator_usage": [
+            {"creator_id": id, "agents": n}
+            for id, n in sorted(creator_usage.items(), key=lambda x: -x[1])
+        ],
         "hours_saved": None,
     }

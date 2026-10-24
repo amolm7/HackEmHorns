@@ -92,3 +92,11 @@ Implemented: one seeded company, local actor roles, two departments, three curat
 Not implemented: production login/OAuth/vault integrations, external customer systems, arbitrary MCP discovery, public/global marketplace, security certification/scanning, Senior summaries, Lead delegation, Ollama, streaming UI, dollar-cost accounting, or distributed workers. Connection resolution is backend-only for the bundled sandbox; no third-party account is connected. Fictional tickets/docs are explicitly labeled. Capability write validation checks discovery plus a read fixture; it does not silently perform an unreviewed write or certify general behavior.
 
 References: [Meta tool calling](https://dev.meta.ai/docs/tool-calling), [Meta structured output](https://dev.meta.ai/docs/structured-output), [Meta quickstart](https://dev.meta.ai/docs/quickstart), [Gemini generateContent](https://ai.google.dev/api/generate-content), [MCP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports).
+
+## Workspace capabilities and design (latest)
+
+- Preloaded capabilities: **Make a slideshow**, **Write a document**, **Analyze data**, **Research & summarize** (plus the labeled support sandbox). Saving tools use risk `local_write`: agents set to "Runs alone" may read and save locally; anything else (e.g. reply drafts) always asks.
+- Agent creation: choose a model, pick capabilities and/or describe the job, review, create. Agents start as "Asks first"; one switch moves them to "Runs alone". Follow-up questions continue a live conversation.
+- Leaderboard: result quality (thumbs up/down on results), approval rate, capability usage and creator usage.
+- `read_url` fetches only public http(s) pages (private/loopback addresses blocked, redirects re-checked). DNS-rebinding is not fully mitigated; do not expose this demo publicly.
+- Design: "Mission control" (dark glass, 3D globe backdrop). See `docs/DESIGN.md`.

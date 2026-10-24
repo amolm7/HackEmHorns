@@ -3,35 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Hire an Agent</title>
-<link rel="preload" href="/fonts/press-start-2p.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/hanken-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/unbounded.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
-<div class="cabinet">
-  <header class="marquee">
-    <a class="logo" href="#/agents" aria-label="Hire an Agent home">
-      <h1>HIRE AN AGENT</h1>
-      <span class="logo-trail" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
-    </a>
-    <div class="marquee-hud">
-      <div class="hud"><span class="hud-label">AGENTS</span><span class="hud-value" id="hud-roster">--</span></div>
-      <div class="hud"><span class="hud-label">TO REVIEW</span><span class="hud-value hot" id="hud-queue">--</span></div>
-      <label class="hud"><span class="hud-label">DEMO USER</span><select id="identity" aria-label="Local development identity"></select></label>
-    </div>
-  </header>
-  <nav aria-label="Main">
-    <ul class="menu" id="menu">
-      <li><a href="#/agents" data-route="agents">My agents</a></li>
-      <li><a href="#/inbox" data-route="inbox">Inbox <span class="badge" id="menu-queue" hidden></span></a></li>
-      <li><a href="#/library" data-route="library">Library</a></li>
-    </ul>
-  </nav>
-  <main id="view" aria-live="polite"><p class="muted">Loading cabinet…</p></main>
-  <footer class="footer"><span>Local dev identities · fictional support sandbox</span><span><a href="/docs">API docs</a></span></footer>
-</div>
+<canvas id="space" aria-hidden="true"></canvas>
+<a class="skip" href="#view">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="#/agents" aria-label="Hire an Agent, home">
+    <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><defs><radialGradient id="brand-g" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#d9fff5"/><stop offset=".35" stop-color="#4ff0c8"/><stop offset="1" stop-color="#1b4fd8"/></radialGradient></defs><circle cx="16" cy="16" r="9" fill="url(#brand-g)"/><ellipse cx="16" cy="16" rx="14" ry="5.2" fill="none" stroke="#4ff0c8" stroke-opacity=".7" stroke-width="1.2" transform="rotate(-22 16 16)"/></svg>
+    <span>Hire an Agent</span>
+  </a>
+  <nav aria-label="Main"><ul class="menu" id="menu">
+    <li><a href="#/agents" data-route="agents"><svg class="ic" aria-hidden="true"></svg>Agents</a></li>
+    <li><a href="#/inbox" data-route="inbox"><svg class="ic" aria-hidden="true"></svg>Inbox <span class="badge" id="menu-queue" hidden></span></a></li>
+    <li><a href="#/leaderboard" data-route="leaderboard"><svg class="ic" aria-hidden="true"></svg>Leaderboard</a></li>
+    <li><a href="#/library" data-route="library"><svg class="ic" aria-hidden="true"></svg>Library</a></li>
+  </ul></nav>
+  <div class="who-box">
+    <a class="btn primary small" href="#/create" id="create-top"></a>
+    <label class="identity"><span class="sr-only">Signed in as (local development identity)</span><select id="identity"></select></label>
+  </div>
+</header>
+<main id="view"><p class="muted loading">Connecting…</p></main>
+<footer class="footer"><span>Local development identities. Sample data is labeled.</span><a href="/docs">API docs</a></footer>
 <div class="toast" id="toast" role="status" hidden></div>
-<div class="levelup" id="levelup" aria-hidden="true"><div><div class="word">PROMOTED!</div><div class="sub" id="levelup-sub"></div></div><div class="burst" id="burst"></div></div>
 </body>
 </html>

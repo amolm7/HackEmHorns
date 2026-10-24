@@ -238,11 +238,11 @@ def create_app(
     def stylesheet():
         return FileResponse(ROOT / "static" / "style.css", media_type="text/css")
 
-    FONTS = {"press-start-2p.woff2", "vt323.woff2"}
+    FONTS = {"unbounded.woff2", "hanken-grotesk.woff2"}
 
     @api.get("/fonts/{name}", include_in_schema=False)
     def font(name: str):
-        # Self-hosted OFL fonts for the arcade UI; whitelisted names only.
+        # Self-hosted OFL fonts; whitelisted names only.
         if name not in FONTS:
             return JSONResponse({"error": {"code": "not_found", "message": "Not found.", "details": {}}}, status_code=404)
         return FileResponse(ROOT / "static" / "fonts" / name, media_type="font/woff2")

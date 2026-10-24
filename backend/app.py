@@ -275,6 +275,11 @@ class Application:
                     return reviews.performance(c, actor, id)
         if path == "runs" and method == "GET":
             result = []
+            outcomes = {
+                o["run_id"]: o
+                for o in all_rows(c, "outcomes")
+                if o["org_id"] == actor["org_id"]
+            }
             for run in all_rows(c, "runs"):
                 try:
                     visible_agent(actor, get(c, "agents", run["agent_id"]))
@@ -283,14 +288,17 @@ class Application:
                 if (not q.get("agent_id") or run["agent_id"] == q["agent_id"]) and (
                     not q.get("status") or run["status"] == q["status"]
                 ):
-                    result.append(public_run(run))
+                    result.append({**public_run(run), "outcome": outcomes.get(run["id"])})
             return result
         if len(p) >= 3 and p[1] == "runs":
             run = get(c, "runs", p[2])
             in_org(actor, run)
             visible_agent(actor, get(c, "agents", run["agent_id"]))
             if len(p) == 3 and method == "GET":
-                return public_run(run)
+                outcome = next(
+                    (o for o in all_rows(c, "outcomes") if o["run_id"] == run["id"]), None
+                )
+                return {**public_run(run), "outcome": outcome}
             if len(p) == 4:
                 if p[3] == "steps" and method == "GET":
                     return [

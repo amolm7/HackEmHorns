@@ -1,22 +1,190 @@
 """Authenticated bundled MCP server, stateless Streamable HTTP JSON subset."""
 
+import csv
+import html
+import io
+import ipaddress
 import json
 import re
 import secrets
+import socket
+import ssl
 import threading
 import urllib.request
 import urllib.error
+from urllib.parse import urljoin, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import certifi
 from ..contracts import *
 from ..db import *
 from ..registry import TOOLS, TICKETS, DOCS
+
+# Tools that save something. They are idempotent per durable execution ID so crash recovery cannot save twice.
+WRITE_TOOLS = {"create_draft", "create_slideshow", "create_document"}
+MAX_PAGE_BYTES = 400_000
+
+
+def parse_outline(text):
+    slides, current = [], None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            current = {"title": line.lstrip("#").strip()[:120] or "Untitled", "bullets": []}
+            slides.append(current)
+        else:
+            if current is None:
+                current = {"title": "Overview", "bullets": []}
+                slides.append(current)
+            bullet = line.lstrip("-*\u2022 ").strip()[:300]
+            if bullet and len(current["bullets"]) < 8:
+                current["bullets"].append(bullet)
+    return slides[:30]
+
+
+def number(value):
+    cleaned = value.strip().replace(",", "").replace("$", "").replace("%", "")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def analyze_table(text, question=""):
+    text = text.strip()
+    require(bool(text), "Provide a table with a header row.")
+    first = text.splitlines()[0]
+    delimiter = "\t" if "\t" in first and "," not in first else ";" if ";" in first and "," not in first else ","
+    rows = [r for r in csv.reader(io.StringIO(text), delimiter=delimiter) if any(c.strip() for c in r)]
+    require(len(rows) >= 2, "The table needs a header row and at least one data row.")
+    header = [h.strip() or f"column {i + 1}" for i, h in enumerate(rows[0][:30])]
+    body = [r[: len(header)] + [""] * (len(header) - len(r)) for r in rows[1:501]]
+    columns, numeric, categories = [], {}, {}
+    for i, name in enumerate(header):
+        values = [r[i].strip() for r in body if r[i].strip()]
+        nums = [number(v) for v in values]
+        if values and all(n is not None for n in nums):
+            columns.append({"name": name, "type": "number"})
+            numeric[name] = {
+                "count": len(nums),
+                "sum": round(sum(nums), 2),
+                "mean": round(sum(nums) / len(nums), 2),
+                "min": min(nums),
+                "max": max(nums),
+            }
+        else:
+            columns.append({"name": name, "type": "text"})
+            counts = {}
+            for v in values:
+                counts[v] = counts.get(v, 0) + 1
+            categories[name] = sorted(counts.items(), key=lambda kv: -kv[1])[:5]
+    chart, highlights = None, []
+    label_col = next((c["name"] for c in columns if c["type"] == "text"), None)
+    value_col = next((c["name"] for c in columns if c["type"] == "number"), None)
+    if value_col:
+        vi = header.index(value_col)
+        li = header.index(label_col) if label_col else None
+        totals = {}
+        for n, r in enumerate(body):
+            value = number(r[vi]) if r[vi].strip() else None
+            if value is None:
+                continue
+            label = r[li].strip() if li is not None and r[li].strip() else f"Row {n + 1}"
+            totals[label] = round(totals.get(label, 0) + value, 2)
+        points = [{"label": k, "value": v} for k, v in list(totals.items())[:12]]
+        chart = {"type": "bar", "x": label_col or "Row", "y": value_col, "points": points}
+        if points:
+            top = max(points, key=lambda p: p["value"])
+            low = min(points, key=lambda p: p["value"])
+            highlights.append(f"Highest {value_col}: {top['label']} ({top['value']:g})")
+            if low["label"] != top["label"]:
+                highlights.append(f"Lowest {value_col}: {low['label']} ({low['value']:g})")
+        highlights.append(f"Total {value_col}: {numeric[value_col]['sum']:g} across {numeric[value_col]['count']} rows")
+    return {
+        "kind": "analysis",
+        "rows": len(body),
+        "columns": columns,
+        "numeric": numeric,
+        "categories": categories,
+        "chart": chart,
+        "highlights": highlights,
+        "question": question[:500],
+        "sample_data": False,
+    }
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def public_address(url):
+    parts = urlsplit(url)
+    require(parts.scheme in {"http", "https"}, "Only http and https links can be read.")
+    require(bool(parts.hostname) and not parts.username and not parts.password, "Invalid link.")
+    require(parts.port in {None, 80, 443}, "Only standard web ports can be read.")
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(parts.hostname, parts.port or 443)}
+    except OSError:
+        raise Error("That address could not be found.", 502, "tool_error")
+    require(
+        bool(addresses) and all(ipaddress.ip_address(a).is_global for a in addresses),
+        "Links to private or local addresses are blocked.",
+        403,
+        "tool_denied",
+    )
+
+
+def read_page(url):
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())),
+        _NoRedirect,
+    )
+    for _ in range(4):
+        public_address(url)
+        request = urllib.request.Request(
+            url, headers={"User-Agent": "HireAnAgent/1.0 (+local)", "Accept": "text/html,text/plain"}
+        )
+        try:
+            response = opener.open(request, timeout=8)
+        except urllib.error.HTTPError as e:
+            if e.code in {301, 302, 303, 307, 308} and e.headers.get("Location"):
+                url = urljoin(url, e.headers["Location"])
+                continue
+            raise Error(f"The page returned HTTP {e.code}.", 502, "tool_error")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise Error("The page could not be reached.", 502, "tool_error")
+        with response:
+            kind = response.headers.get_content_type()
+            require(kind in {"text/html", "text/plain", "application/xhtml+xml"}, "Only text pages can be read.", 502, "tool_error")
+            raw = response.read(MAX_PAGE_BYTES)
+            charset = response.headers.get_content_charset() or "utf-8"
+        text = raw.decode(charset, "replace")
+        title = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+        text = re.sub(r"(?is)<(script|style|noscript|svg|head)[^>]*>.*?</\1>", " ", text)
+        text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", text))
+        text = re.sub(r"\s+", " ", text).strip()
+        return {
+            "kind": "page",
+            "url": url,
+            "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip()[:200] if title else url,
+            "text": text[:6000],
+            "truncated": len(text) > 6000,
+        }
+    raise Error("Too many redirects.", 502, "tool_error")
 
 
 def perform(db, name, args, execution_id):
     require(name in TOOLS, "Unknown sandbox tool.", 403)
     require(isinstance(args, dict), "Tool arguments must be an object.")
-    with db.transaction(name == "create_draft") as c:
-        if name == "create_draft":
+    if name == "analyze_data":
+        return analyze_table(string(args.get("table"), "table", 4000), str(args.get("question") or ""))
+    if name == "read_url":
+        # Network access happens outside any database transaction.
+        return {**read_page(string(args.get("url"), "url", 2000)), "fetched_at": now()}
+    with db.transaction(name in WRITE_TOOLS) as c:
+        if name in WRITE_TOOLS:
             old = [r for r in all_rows(c, "tool_executions") if r["id"] == execution_id]
             if old:
                 require(
@@ -25,16 +193,42 @@ def perform(db, name, args, execution_id):
                     409,
                 )
                 return old[0]["result"]
-            ticket_id = string(args.get("ticket_id"), "ticket_id", 100)
-            body = string(args.get("body"), "body", 4000)
-            require(any(t["id"] == ticket_id for t in TICKETS), "Unknown ticket.")
-            result = {
-                "draft_id": uid(),
-                "ticket_id": ticket_id,
-                "body": body,
-                "sent": False,
-                "saved_at": now(),
-            }
+            if name == "create_draft":
+                ticket_id = string(args.get("ticket_id"), "ticket_id", 100)
+                body = string(args.get("body"), "body", 4000)
+                require(any(t["id"] == ticket_id for t in TICKETS), "Unknown ticket.")
+                result = {
+                    "draft_id": uid(),
+                    "ticket_id": ticket_id,
+                    "body": body,
+                    "sent": False,
+                    "saved_at": now(),
+                }
+            elif name == "create_slideshow":
+                title = string(args.get("title"), "title", 200)
+                slides = parse_outline(string(args.get("outline"), "outline", 4000))
+                require(bool(slides), "The outline needs at least one slide.")
+                result = {
+                    "kind": "slideshow",
+                    "artifact_id": uid(),
+                    "title": title,
+                    "slides": slides,
+                    "slide_count": len(slides),
+                    "published": False,
+                    "saved_at": now(),
+                }
+            else:
+                title = string(args.get("title"), "title", 200)
+                body = string(args.get("body"), "body", 4000)
+                result = {
+                    "kind": "document",
+                    "artifact_id": uid(),
+                    "title": title,
+                    "body": body,
+                    "word_count": len(body.split()),
+                    "published": False,
+                    "saved_at": now(),
+                }
             put(
                 c,
                 "tool_executions",
@@ -193,7 +387,7 @@ class MCP:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=8) as r:
+            with urllib.request.urlopen(req, timeout=32) as r:
                 raw = r.read()
         except (urllib.error.URLError, TimeoutError):
             raise Error("Bundled MCP server is unavailable.", 502, "mcp_error")

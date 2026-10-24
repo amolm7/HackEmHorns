@@ -1,7 +1,7 @@
 import json
 from ..contracts import *
 from ..db import *
-from ..registry import capability, check_bindings, validate
+from ..registry import capability, check_bindings, validate, list_catalog
 from ..runtime import model
 
 
@@ -56,6 +56,51 @@ def new_agent(c, actor, spec, status="active"):
     )
     audit(c, actor, "agent.created", agent["id"], {"status": status, "level": "intern"})
     return agent
+
+
+INTENTS = {
+    "make-slideshow": ["slide", "deck", "presentation", "powerpoint", "pitch"],
+    "write-document": ["document", "memo", "report", "brief", "proposal", "essay", "write up", "one-pager", "plan for"],
+    "analyze-data": ["data", "csv", "spreadsheet", "analy", "chart", "metrics", "numbers"],
+    "research-web": ["research", "summar", "article", "web page", "website", "url", "http", "look up"],
+}
+SUPPORT_WORDS = ["ticket", "support", "triage", "customer", "reply", "replies"]
+SUPPORT_INSTRUCTIONS = "Triage support tickets, flag urgent issues, and prepare helpful local reply drafts using help-document evidence. Cite ticket and document IDs. Never claim drafts were sent."
+
+
+def infer_capabilities(lower):
+    picks = [cap for cap, words in INTENTS.items() if any(w in lower for w in words)]
+    if picks:
+        return picks
+    if not any(w in lower for w in SUPPORT_WORDS + ["draft"]):
+        raise Error(
+            "I couldn't match that to a capability. Pick one from the list, or say what the agent should make or analyze: a slideshow, a document, data, or web research.",
+            422,
+            "unsupported_capability",
+        )
+    base = ["ticket-search", "help-docs"]
+    if any(w in lower for w in ["draft", "reply", "triage"]):
+        base.append("reply-drafts")
+    return base
+
+
+def default_name(caps):
+    if len(caps) == 1:
+        return caps[0].get("agent_name") or caps[0]["name"]
+    if all(c.get("group") == "Support sandbox" for c in caps):
+        return "Ticket Triage"
+    return "Workspace Assistant"
+
+
+def default_instructions(caps):
+    if all(c.get("group") == "Support sandbox" for c in caps):
+        return SUPPORT_INSTRUCTIONS
+    names = ", ".join(c["name"].lower() for c in caps)
+    return (
+        f"You are a capable assistant with these capabilities: {names}. Do the user's task with your tools instead of describing what you would do. "
+        "Ask one short clarifying question only when you cannot proceed without the answer. Cite any pages you read. "
+        "Saving a deck or document only saves it in the workspace; never claim you sent or published anything."
+    )
 
 
 def conversation(c, actor):
@@ -118,7 +163,11 @@ def message(c, app, actor, id, data):
                     ],
                 }
             ],
-            "You are a Recruiter setup helper. Available capabilities: ticket-search (search support tickets), help-docs (search help docs), reply-drafts (save a local draft; never send). Return JSON with name, job_description, instructions, capability_ids (array of catalog IDs), and kind (hire or capability). Only use capability to add tools when a target_agent_id has been explicitly supplied by the application. Do not invent connections, permissions, roles, departments or managers. Never claim a test or hire occurred. No GitHub, email sending, web search or external integrations are connected.",
+            "You are a Recruiter setup helper. Available capabilities: "
+            + "; ".join(
+                f"{x['id']} ({x['description']})" for x in list_catalog(c, actor)
+            )
+            + ". Return JSON with name, job_description, instructions, capability_ids (array of catalog IDs), and kind (hire or capability). Only use capability to add tools when a target_agent_id has been explicitly supplied by the application. Do not invent connections, permissions, roles, departments or managers. Never claim a test or hire occurred. No GitHub, email sending or other external integrations are connected.",
             structured=True,
             provider=mode,
         )
@@ -148,17 +197,15 @@ def message(c, app, actor, id, data):
             422,
             "unsupported_capability",
         )
-    requested = parsed.get("capability_ids") or data.get("capability_ids")
+    # Capabilities the person ticked in the app win over the helper model's suggestion.
+    requested = data.get("capability_ids") or parsed.get("capability_ids")
     if requested is None:
-        requested = previous.get("capability_ids") or ["ticket-search", "help-docs"]
-        if any(w in lower for w in ["draft", "reply", "triage"]):
-            requested = list(dict.fromkeys(requested + ["reply-drafts"]))
+        requested = previous.get("capability_ids") or infer_capabilities(lower)
     require(
         isinstance(requested, list) and 0 < len(requested) <= 10,
         "Choose 1–10 capability IDs.",
     )
-    for id_ in requested:
-        capability(c, actor, id_)
+    chosen = [capability(c, actor, id_) for id_ in requested]
     target_id = data.get("target_agent_id") or (
         old.get("target_agent_id") if old and old["status"] == "draft" else None
     )
@@ -167,10 +214,10 @@ def message(c, app, actor, id, data):
         manage(actor, target)
     spec = {
         **previous,
-        "name": parsed.get("name")
-        or data.get("name")
+        "name": data.get("name")
+        or parsed.get("name")
         or previous.get("name")
-        or "Ticket Triage",
+        or default_name(chosen),
         "job_description": parsed.get("job_description")
         or data.get("job_description")
         or previous.get("job_description")
@@ -178,7 +225,7 @@ def message(c, app, actor, id, data):
         "instructions": parsed.get("instructions")
         or data.get("instructions")
         or previous.get("instructions")
-        or "Triage support tickets, flag urgent issues, and prepare helpful local reply drafts using help-document evidence. Cite ticket and document IDs. Never claim drafts were sent.",
+        or default_instructions(chosen),
         "department_id": data.get("department_id")
         or previous.get("department_id")
         or (target["department_id"] if target else None),
@@ -204,8 +251,12 @@ def message(c, app, actor, id, data):
     missing = [k for k in ["department_id", "manager_id"] if not spec.get(k)]
     if not missing:
         check_manager(c, actor, spec["department_id"], spec["manager_id"])
-        connection_id = data.get("connection_id", "support-local")
         for cap_id in spec["capability_ids"]:
+            connection_id = (
+                data.get("connection_id")
+                or capability(c, actor, cap_id).get("connection_id")
+                or "support-local"
+            )
             v = validate(
                 c,
                 app,

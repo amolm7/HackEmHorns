@@ -84,8 +84,8 @@ class BackendTests(unittest.TestCase):
         return self.call("GET", f'runs/{run["id"]}/steps')
 
     def test_registry_discovery_and_real_read_validation(self):
-        self.assertEqual(len(self.call("GET", "capabilities")), 3)
-        self.assertEqual(len(self.app.mcp.discover()), 3)
+        self.assertEqual(len(self.call("GET", "capabilities")), 7)
+        self.assertEqual(len(self.app.mcp.discover()), 7)
         v = self.call(
             "POST",
             "capabilities/ticket-search/validate",
