@@ -11,29 +11,27 @@
 <body>
 <div class="cabinet">
   <header class="marquee">
-    <a class="logo" href="#/arcade" aria-label="Hire an Agent home">
+    <a class="logo" href="#/agents" aria-label="Hire an Agent home">
       <h1>HIRE AN AGENT</h1>
       <span class="logo-trail" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
     </a>
     <div class="marquee-hud">
-      <div class="hud"><span class="hud-label">ROSTER</span><span class="hud-value" id="hud-roster">--</span></div>
-      <div class="hud"><span class="hud-label">QUEUE</span><span class="hud-value hot" id="hud-queue">--</span></div>
-      <label class="hud"><span class="hud-label">PLAYER</span><select id="identity" aria-label="Local development identity"></select></label>
+      <div class="hud"><span class="hud-label">AGENTS</span><span class="hud-value" id="hud-roster">--</span></div>
+      <div class="hud"><span class="hud-label">TO REVIEW</span><span class="hud-value hot" id="hud-queue">--</span></div>
+      <label class="hud"><span class="hud-label">DEMO USER</span><select id="identity" aria-label="Local development identity"></select></label>
     </div>
   </header>
   <nav aria-label="Main">
     <ul class="menu" id="menu">
-      <li><a href="#/arcade" data-route="arcade">Arcade</a></li>
-      <li><a href="#/hire" data-route="hire">New player</a></li>
-      <li><a href="#/queue" data-route="queue">Queue <span class="badge" id="menu-queue" hidden></span></a></li>
-      <li><a href="#/scores" data-route="scores">High scores</a></li>
-      <li><a href="#/shop" data-route="shop">Cartridge shop</a></li>
+      <li><a href="#/agents" data-route="agents">My agents</a></li>
+      <li><a href="#/inbox" data-route="inbox">Inbox <span class="badge" id="menu-queue" hidden></span></a></li>
+      <li><a href="#/library" data-route="library">Library</a></li>
     </ul>
   </nav>
   <main id="view" aria-live="polite"><p class="muted">Loading cabinet…</p></main>
   <footer class="footer"><span>Local dev identities · fictional support sandbox</span><span><a href="/docs">API docs</a></span></footer>
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
-<div class="levelup" id="levelup" aria-hidden="true"><div><div class="word">LEVEL UP!</div><div class="sub" id="levelup-sub"></div></div><div class="burst" id="burst"></div></div>
+<div class="levelup" id="levelup" aria-hidden="true"><div><div class="word">PROMOTED!</div><div class="sub" id="levelup-sub"></div></div><div class="burst" id="burst"></div></div>
 </body>
 </html>

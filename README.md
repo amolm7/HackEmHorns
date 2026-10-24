@@ -47,13 +47,13 @@ An optional Gemini adapter is available through `GEMINI_API_KEY` and `GEMINI_MOD
 ## Try the workflow
 
 1. Keep identity **Pavan**, Support department, Pavan as manager, and demo mode.
-2. Ask the Recruiter to hire a support triage agent. Inspect the review card and its validation references. Confirm the hire.
+2. Open **My agents → Hire agent**, describe a support triage job, and review the suggested setup. Confirm the hire.
 3. Start the default task. The Intern pauses **before** calling the first tool.
-4. Open **Manager Inbox**, inspect the exact arguments and evidence, and approve. Repeat for document search and draft creation. These are distinct actions with distinct approvals.
-5. Inspect actual results and steps from **Workforce & runs**. Draft creation only saves a local draft; no message is sent.
-6. Promote the agent to Associate with a reason. On the next run, reads proceed automatically but draft creation still requires approval.
-7. Publish the agent from **Company marketplace** and install it. The copy starts Intern with no bound connections. Select the installed agent and validate/activate its local connections as its manager.
-8. Record a task outcome separately from approving actions. Performance includes explicit denominators; leaderboard approval ranking requires at least five reviewed actions.
+4. Open **Inbox**, inspect the exact arguments and evidence, and approve. Repeat for document search and draft creation. These are distinct actions with distinct approvals.
+5. Open the agent from **My agents**. Results appear under **Task & result**, with history and metrics under **Activity & performance**. Draft creation only saves a local draft; no message is sent.
+6. In the agent’s **Settings**, promote it to Associate with a reason. On the next run, reads proceed automatically but draft creation still requires approval.
+7. Publish the agent from **Library → Share with your team**, then install it from **Agent templates**. The copy starts Intern with no bound connections. Select the installed agent and validate/activate its local connections as its manager.
+8. Record a task outcome separately from approving actions. Performance includes explicit denominators and is available within each agent’s profile.
 
 For an automated HTTP walkthrough against a running server:
 
