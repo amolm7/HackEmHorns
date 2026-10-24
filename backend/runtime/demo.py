@@ -5,6 +5,7 @@ shown without an API key. Live models write their own tool arguments instead.
 """
 
 import re
+import csv
 from ..contracts import Error
 
 SAMPLE_CSV = "month,revenue,signups\nJan,12400,310\nFeb,15800,402\nMar,14200,377\nApr,19600,515\nMay,22100,588\nJun,24800,640"
@@ -52,15 +53,29 @@ def document(task):
     return name, "\n".join(lines)
 
 
-def table(task):
-    lines = [ln for ln in task.replace("/", "\n").split("\n")]
-    csvish = [ln.strip() for ln in lines if ln.count(",") >= 1]
-    if len(csvish) >= 2:
-        return "\n".join(csvish)[:4000]
+def table(task, fallback=True):
+    lines = task.replace("/", "\n").splitlines()
+    groups, group, width = [], [], None
+    for line in lines:
+        cells = next(csv.reader([line]))
+        if len(cells) >= 2 and (width is None or len(cells) == width):
+            group.append(line.strip())
+            width = len(cells)
+        else:
+            if len(group) >= 2:
+                groups.append(group)
+            group = [line.strip()] if len(cells) >= 2 else []
+            width = len(cells) if group else None
+    if len(group) >= 2:
+        groups.append(group)
+    if groups:
+        return "\n".join(max(groups, key=len))[:4000]
+    if not fallback:
+        raise Error("Include a CSV table in this job before running analysis in demo mode.", 422, "invalid_request")
     return SAMPLE_CSV
 
 
-def workspace_plan(task, names):
+def workspace_plan(task, names, strict=False):
     """Return the tool calls demo mode makes for whichever workspace tools the agent has."""
     queue = []
     if "read_url" in names:
@@ -73,7 +88,7 @@ def workspace_plan(task, names):
             )
         queue.append({"name": "read_url", "args": {"url": urls[0].rstrip(".,")}})
     if "analyze_data" in names:
-        queue.append({"name": "analyze_data", "args": {"table": table(task), "question": task[:500]}})
+        queue.append({"name": "analyze_data", "args": {"table": table(task, fallback=not strict), "question": task[:500]}})
     if "create_slideshow" in names:
         queue.append({"name": "create_slideshow", "args": {"title": topic(task), "outline": outline(task)}})
     if "create_document" in names:

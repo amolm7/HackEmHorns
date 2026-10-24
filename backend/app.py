@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from .contracts import *
 from .db import *
-from . import registry, recruiter, reviews
+from . import registry, recruiter, reviews, workqueue
 from .runtime import Runtime, start, public_run, cancel
 from .runtime.mcp import MCP
 
@@ -88,6 +88,8 @@ class Application:
     def route(self, c, actor, method, p, q, d):
         require(p[0] == "api", "Endpoint not found.", 404, "not_found")
         path = "/".join(p[1:])
+        if p[1:2] == ["work-queue"]:
+            return workqueue.route(c, self, actor, method, p, d)
         if method == "GET" and path == "me":
             return {**actor, "identity_mode": "local_development_only"}
         if method == "GET" and path == "dev/users":

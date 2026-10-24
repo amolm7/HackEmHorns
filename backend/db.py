@@ -5,6 +5,7 @@ import sqlite3
 from .contracts import Error, uid, now
 
 TABLES = {
+    "work_items",
     "users",
     "departments",
     "capabilities",

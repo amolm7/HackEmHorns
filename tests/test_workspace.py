@@ -214,6 +214,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(out["text"], "First paragraph. Second.")
         self.assertNotIn("evil", out["text"])
 
+    def test_article_extraction_omits_page_navigation(self):
+        parser = mcp_module._PageText()
+        parser.feed('<html><body><header>Menu</header><nav>Jump to content</nav>'
+                    '<main><nav>Contents</nav><article><p>Kobe won five championships.</p>'
+                    '<script>noise()</script></article></main><footer>Donate</footer></body></html>')
+        self.assertEqual(parser.text(), "Kobe won five championships.")
+
+    def test_missing_page_returns_recoverable_tool_result(self):
+        failure = mcp_module.urllib.error.HTTPError("https://example.com/missing", 404, "Missing", {}, None)
+        with patch.object(mcp_module, "public_address"), patch.object(
+            mcp_module.urllib.request.OpenerDirector, "open", side_effect=failure
+        ):
+            result = mcp_module.read_page("https://example.com/missing")
+        self.assertEqual(result["kind"], "page_error")
+        self.assertEqual(result["http_status"], 404)
+        self.assertNotIn("text", result)
+
     def test_tool_arguments_reject_unknown_or_non_text_fields(self):
         _, agent = self.hire("Data", caps=["analyze-data"])
         self.call("POST", f'agents/{agent["id"]}/level', {"level": "associate", "reason": "ok"})

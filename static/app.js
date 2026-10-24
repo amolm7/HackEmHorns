@@ -57,7 +57,7 @@ async function api(path, method = "GET", body) {
 }
 
 async function load() {
-  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "runs", "marketplace", "leaderboard"];
+  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "runs", "marketplace", "leaderboard", "work-queue"];
   const vals = await Promise.all(paths.map(p => api(p)));
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
   S.approvals = await api("approvals").catch(() => []);
@@ -122,13 +122,13 @@ async function act(fn, el) {
 function route() {
   const [raw, id] = location.hash.replace(/^#\/?/, "").split("/");
   const alias = { arcade: "agents", hire: "create", queue: "inbox", scores: "leaderboard", shop: "library" };
-  return { name: alias[raw] || raw || "agents", id };
+  return { name: alias[raw] || raw || "work", id };
 }
-const TITLES = { agents: "Agents", create: "Create an agent", inbox: "Inbox", leaderboard: "Leaderboard", library: "Library" };
+const TITLES = { work: "Team work", agents: "Agents", create: "Create an agent", inbox: "Inbox", leaderboard: "Leaderboard", library: "Library" };
 function render() {
   const r = route(), section = r.name === "agent" ? "agents" : r.name;
   $$("#menu a").forEach(a => { if (a.dataset.route === section) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-  const views = { agents: agentsScreen, create: createScreen, agent: agentScreen, inbox: inboxScreen, leaderboard: leaderboardScreen, library: libraryScreen };
+  const views = { work: workScreen, agents: agentsScreen, create: createScreen, agent: agentScreen, inbox: inboxScreen, leaderboard: leaderboardScreen, library: libraryScreen };
   $("#view").innerHTML = (views[r.name] || agentsScreen)(r.id);
   document.title = (r.name === "agent" ? agentById(r.id)?.name || "Agent" : TITLES[r.name] || "Agents") + " · Hire an Agent";
   if (ui.fresh) setTimeout(() => { ui.fresh = null; }, 900);
@@ -140,7 +140,7 @@ function chrome() {
   $("#identity").innerHTML = opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join("/")}`]), user);
   const pending = S.approvals.filter(a => a.status === "pending").length, b = $("#menu-queue");
   b.hidden = !pending; b.textContent = pending;
-  const names = { agents: "agents", inbox: "inbox", leaderboard: "trophy", library: "library" };
+  const names = { work: "ticket", agents: "agents", inbox: "inbox", leaderboard: "trophy", library: "library" };
   $$("#menu a").forEach(a => { const svg = $("svg", a); if (svg && !svg.firstChild) { svg.setAttribute("viewBox", "0 0 24 24"); svg.innerHTML = ICONS[names[a.dataset.route]].map(d => `<path d="${d}"/>`).join(""); } });
   const c = $("#create-top"); if (!c.firstChild) c.innerHTML = `${icon("plus", "sm")}Create agent`;
 }
@@ -148,6 +148,39 @@ function chrome() {
 /* ---------- screens ---------- */
 function emptyState(title, body, cta = "") {
   return `<div class="empty">${orb("empty-" + title, { size: 76 })}<h2>${esc(title)}</h2><p>${esc(body)}</p>${cta}</div>`;
+}
+
+const JOBS = {
+  launch: { name: "Product launch", caps: ["analyze-data", "write-document", "make-slideshow"], tools: ["analyze_data", "create_document", "create_slideshow"], deliverables: "Data analysis + decision brief + pitch deck", agent: "Launch strategist" },
+  analysis: { name: "Growth analysis", caps: ["analyze-data"], tools: ["analyze_data"], deliverables: "Analysis + chart", agent: "Growth analyst" },
+  brief: { name: "Decision brief", caps: ["write-document"], tools: ["create_document"], deliverables: "Decision document", agent: "Strategy associate" },
+  support: { name: "Support response", caps: ["ticket-search", "help-docs", "reply-drafts"], tools: ["search_tickets", "search_docs", "create_draft"], deliverables: "Policy-backed reply draft", agent: "Support specialist" }
+};
+function workflowAgents(w) {
+  return S.agents.filter(a => a.status === "active" && a.department_id === w.department_id && canManage(a) && w.required_tools.every(t => capsOf(a).some(c => (c.tools || []).includes(t))));
+}
+function workScreen() {
+  const items = [...(S["work-queue"] || [])].sort((a,b) => Number(a.workflow === "support") - Number(b.workflow === "support")), finished = items.filter(w => w.finished_at);
+  const accepted = items.filter(w => w.status === "accepted"), corrected = items.filter(w => w.status === "needs_correction");
+  const seconds = finished.length ? Math.round(finished.reduce((n,w) => n + (Date.parse(w.finished_at)-Date.parse(w.assigned_at))/1000, 0)/finished.length) : null;
+  return `<div class="screen"><div class="head"><div><h1>Give your team a mission.</h1><p class="muted">One job. Multiple deliverables. A named owner and a reviewable outcome.</p></div><a class="btn" href="#/library">Reuse a team template</a></div>
+    <div class="queue-stats"><div class="panel"><b>${items.length}</b><span>Jobs received</span></div><div class="panel"><b>${items.filter(w=>w.status === "awaiting_approval").length}</b><span>Waiting for a decision</span></div><div class="panel"><b>${accepted.length} / ${accepted.length + corrected.length}</b><span>Outcomes accepted · ${corrected.length} need correction</span></div><div class="panel"><b>${seconds === null ? "—" : seconds + "s"}</b><span>Avg. execution turnaround · includes failed jobs and action review</span></div></div>
+    <section class="panel stack"><div><h2>Start with a business outcome</h2><p class="muted">These examples use fictional inputs. Demo mode creates labeled templates; select a live model when assigning for original work. All outputs stay in the local workspace.</p></div><div class="mission-templates">${["launch","analysis","brief"].map(k=>`<button class="choice" data-act="load-job" data-workflow="${k}"><span class="body"><span class="title">${esc(JOBS[k].name)}</span><span class="sub">${esc(JOBS[k].deliverables)}</span></span>${icon("plus")}</button>`).join("")}</div><details><summary>Other examples</summary><button class="btn small" data-act="load-job" data-workflow="support">Load support tickets</button></details></section>
+    <details class="panel plain"><summary>Create your own job</summary><form class="stack" data-form="create-job"><label class="field">Workflow<select name="workflow">${opts(["launch","analysis","brief"].map(k=>[k,JOBS[k].name]),"launch")}</select></label><label class="field">Team<select name="department_id">${opts(S.departments.map(d=>[d.id,d.name]),defaultDept())}</select></label><label class="field">Job title<input name="title" required maxlength="100" placeholder="Prepare our investor update"></label><label class="field">Brief, source data and company rules<textarea name="task" required maxlength="4000" placeholder="Include the inputs, required outputs and constraints. For analysis, paste CSV data."></textarea></label><button class="btn primary">Add to work queue</button></form></details>
+    <div class="head"><h2>Work queue</h2><a class="btn small" href="#/inbox">Review actions in Inbox</a></div>
+    ${!items.length ? emptyState("Your next mission starts here", "Choose a scenario above, or add a job with your own inputs and company rules.") : items.map(w => {
+      const a = agentById(w.agent_id), canReview = a && canManage(a), id = esc(w.id), job = JOBS[w.workflow], eligible = workflowAgents(w);
+      const state = {unassigned:"Unassigned",accepted:"Accepted",needs_correction:"Needs correction"}[w.status];
+      return `<section class="panel stack"><div class="row between"><div><span class="pill">${esc(job.name)} · ${w.sample_data ? "Fictional input":"User-provided input"}</span><h2>${esc(w.title)}</h2></div>${state ? pill(w.status === "accepted" ? "ok":"ask",state) : statusPill(w.status)}</div>
+      <p class="muted">${esc(job.deliverables)} · Reviewer: ${a ? esc(userName(a.manager_id)) : "Assigned agent’s manager"}</p>
+      ${w.ticket ? `<p>${esc(w.ticket.body)}</p><p class="faint">Proposed routing: ${esc(w.route_to)} · recommendation only</p>` : `<details><summary>Brief & company rules</summary><pre>${esc(w.task)}</pre></details>`}
+      <p class="faint">${a ? "Owner: " + esc(a.name) : "No agent assigned"}${w.run_id ? " · " + esc(modelLabel(S.runs.find(r=>r.id === w.run_id)?.mode)) : ""}</p>
+      ${!w.run_id || ["needs_correction","failed","cancelled"].includes(w.status) ? `<div class="row"><button class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}" data-dept="${esc(w.department_id)}">Hire ${esc(job.agent.toLowerCase())}</button></div><form class="row" data-form="assign-ticket" data-id="${id}"><label class="field">Assign owner<select name="agent_id" required>${opts(eligible.map(a=>[a.id,a.name]),"")}</select></label><label class="field">Execution<select name="mode">${opts(S["model-profiles"].filter(m=>m.enabled).map(m=>[m.id,m.id === "demo" ? "Demo · fixed templates" : m.name]),"demo")}</select></label><button class="btn primary" ${eligible.length ? "":"disabled"}>${w.run_id ? "Revise & rerun" : "Assign & start"}</button>${eligible.length ? "":"<span class='faint'>Hire or install an agent with the required capabilities first.</span>"}</form>` : `<div class="row"><a class="btn small" href="#/agent/${esc(w.agent_id)}">Open agent & audit trail</a>${w.status === "awaiting_approval" ? '<a class="btn primary small" href="#/inbox">Review next action</a>':""}</div>`}
+      ${w.artifacts?.length ? `<details ${w.finished_at ? "open":""}><summary>Deliverables & evidence (${w.artifacts.length})</summary><div class="stack">${w.artifacts.map((x,i)=>artifactView(w.run_id + "-" + i,x)).join("")}</div></details>` : ""}
+      ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
+      ${w.finished_at && !w.outcome && ["completed","failed"].includes(w.status) && canReview ? `<form class="stack" data-form="review-ticket" data-id="${id}"><label class="field">Outcome notes<textarea name="comment" required placeholder="Do the deliverables meet the brief and company rules? What needs correction?"></textarea></label><div class="row"><button class="btn primary small" name="success" value="true" ${w.deliverables_ready && w.status === "completed" ? "":"disabled"}>Accept work</button><button class="btn small" name="success" value="false">Needs correction</button></div></form>`:""}
+      ${w.outcome ? `<p><b>Manager outcome:</b> ${esc(w.outcome.comment)}</p>`:""}</section>`;
+    }).join("")}</div>`;
 }
 
 function agentCard(a) {
@@ -164,7 +197,7 @@ function agentCard(a) {
 function agentsScreen() {
   const pending = S.approvals.filter(a => a.status === "pending"), drafts = S.proposals.filter(p => p.status === "draft");
   return `<div class="screen">
-    <div class="head"><div><h1>Your agents</h1><p class="muted">Open an agent to give it work, or create a new one from a capability.</p></div></div>
+    <div class="head"><div><h1>Your agents</h1><p class="muted">Assign recurring work from Team work, or open an agent for an individual request.</p></div></div>
     ${pending.length ? `<a class="banner" href="#/inbox">${icon("inbox")}<span><b>${pending.length} action${pending.length === 1 ? "" : "s"}</b> waiting for your review</span><span class="arrow">Open inbox ${icon("arrow", "sm")}</span></a>` : ""}
     ${S.agents.length ? `<div class="grid">${S.agents.map(agentCard).join("")}</div>` : `<div class="panel">${emptyState("No agents yet", "Choose a model, pick what it can do, and it is ready in under a minute.", canHire() ? `<a class="btn primary" href="#/create">${icon("plus", "sm")}Create your first agent</a>` : `<p class="faint">Switch to a manager or builder identity to create agents.</p>`)}</div>`}
     ${drafts.length ? `<details class="panel plain tight"><summary>${drafts.length} draft${drafts.length === 1 ? "" : "s"} waiting for confirmation</summary><div class="stack">${drafts.map(p => `<div class="row between"><span>${esc(p.spec.name)} <span class="faint">· ${esc(userName(p.spec.manager_id))} confirms</span></span><button class="btn small" data-act="resume-draft" data-id="${esc(p.id)}">Review</button></div>`).join("")}</div></details>` : ""}
@@ -286,6 +319,7 @@ function artifactView(runId, x) {
   if (r.kind === "slideshow") return slideViewer(runId, r);
   if (r.kind === "document") return docView(r);
   if (r.kind === "analysis") return analysisView(r);
+  if (r.kind === "page_error") return `<div class="result"><span class="result-label">Page unavailable</span><div class="source"><p>${esc(r.error)}</p><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a><p>The agent can continue using other sources.</p></div></div>`;
   if (r.kind === "page") return `<div class="result"><span class="result-label">${icon("search", "sm")}Read a web page</span><div class="source"><b>${esc(r.title)}</b><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a><p>${esc(r.text.slice(0, 700))}${r.text.length > 700 ? "…" : ""}</p></div></div>`;
   if (r.draft_id) return `<div class="result"><span class="result-label">${icon("reply", "sm")}Reply draft · saved, not sent</span><div class="source"><b>Ticket ${esc(r.ticket_id)}</b><p>${esc(r.body)}</p></div></div>`;
   if (r.tickets) return `<div class="result"><span class="result-label">${icon("ticket", "sm")}Sample support tickets</span>${r.tickets.map(t => `<div class="source"><b>${esc(t.id)} · ${esc(t.subject)}</b><p>${esc(t.body)}</p><span class="faint">${esc(t.customer)} · ${esc(t.priority)}</span></div>`).join("")}</div>`;
@@ -330,7 +364,7 @@ function agentScreen(id) {
     return `${gap}<div class="turn"><div class="you">${esc(r.task)}</div><div class="reply">${orb(a.id, { size: 34, level: a.level })}<div class="out">${runBody(r, a)}</div></div></div>`;
   }).join("");
   const lb = S.leaderboard.agents.find(r => r.agent_id === id), m = ui.metrics[id];
-  return `<div class="screen"><a class="back" href="#/agents">${icon("back", "sm")}Agents</a>
+  return `<div class="screen"><a class="btn small" href="#/work">Team work queue</a><a class="back" href="#/agents">${icon("back", "sm")}Agents</a>
     <div class="agent-head">${orb(a.id, { size: 72, level: a.level, cls: (ui.fresh === a.id ? "ignite " : "") + (ui.unlock === a.id ? "unlock" : "") })}
       <div class="meta"><div class="row between"><h1>${esc(a.name)}</h1>${a.status !== "active" ? statusPill(a.status) : ""}</div>
         <div class="row"><div class="seg" role="group" aria-label="Autonomy"><button data-act="mode" data-id="${esc(a.id)}" data-level="intern" aria-pressed="${!alone(a)}" ${manages ? "" : "disabled"}>${icon("shield", "sm")}Asks first</button><button data-act="mode" data-id="${esc(a.id)}" data-level="associate" data-tone="alone" aria-pressed="${alone(a)}" ${manages ? "" : "disabled"}>${icon("bolt", "sm")}Runs alone</button></div><span class="pill">${icon("model", "sm")}${esc(modelLabel(a.model_profile_id))}</span></div>
@@ -405,6 +439,8 @@ function libraryScreen() {
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const { act: kind, id } = b.dataset;
+  if (kind === "load-job") act(async () => { await api("work-queue/sample-batch", "POST", { workflow: b.dataset.workflow }); return "Sample job loaded. Hire an owner or assign an existing agent."; }, b);
+  if (kind === "hire-workflow") { const job = JOBS[b.dataset.workflow]; wiz = { ...wiz0(), step: 1, caps: job.caps, work: true, name: job.agent, text: `Own ${job.name.toLowerCase()} jobs. Produce ${job.deliverables.toLowerCase()}. Follow the job’s company rules, use source data and ask before acting. Never publish, send messages or spend money.`, dept: b.dataset.dept || defaultDept(), manager: defaultManager() }; location.hash = "#/create"; }
   if (kind === "wiz-model") { wiz.mode = id; render(); }
   if (kind === "wiz-go") { wiz.step = Number(b.dataset.step); render(); }
   if (kind === "wiz-cap") { wiz.caps = wiz.caps.includes(id) ? wiz.caps.filter(c => c !== id) : [...wiz.caps, id]; render(); }
@@ -422,8 +458,8 @@ document.addEventListener("click", e => {
   }, b);
   if (kind === "wiz-confirm") act(async () => {
     const upgrade = wiz.proposal.kind !== "hire", a = await api(`recruiter/proposals/${id}/confirm`, "POST", { revision: Number(b.dataset.rev) });
-    wiz = wiz0(); ui.fresh = upgrade ? null : a.id; location.hash = "#/agent/" + a.id;
-    return upgrade ? `Capability added to ${a.name}. It asks first again.` : `${a.name} is ready. Give it a task.`;
+    const destination = wiz.work ? "#/work" : "#/agent/" + a.id; wiz = wiz0(); ui.fresh = upgrade ? null : a.id; location.hash = destination;
+    return upgrade ? `Capability added to ${a.name}. It asks first again.` : `${a.name} is ready. Assign a job from Team work.`;
   }, b);
   if (kind === "resume-draft") { const p = S.proposals.find(x => x.id === id); wiz = { ...wiz0(), step: 3, proposal: p, mode: p.spec.model_profile_id, caps: p.spec.capability_ids, target: p.target_agent_id || "" }; location.hash = "#/create"; }
   if (kind === "use-cap") { wiz = { ...wiz0(), caps: [id], step: 1 }; location.hash = "#/create"; }
@@ -451,6 +487,9 @@ document.addEventListener("submit", e => {
   const f = e.target, kind = f.dataset.form; if (!kind) return; e.preventDefault();
   const d = Object.fromEntries(new FormData(f)), sub = e.submitter;
   if (sub?.name) d[sub.name] = sub.value;
+  if (kind === "create-job") act(async () => { await api("work-queue", "POST", d); return "Job added. Assign an owner to begin."; }, sub);
+  if (kind === "assign-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/assign`, "POST", d); return "Assigned. The agent will pause for required approvals."; }, sub);
+  if (kind === "review-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/review`, "POST", { success: d.success === "true", comment: d.comment }); return "Outcome recorded separately from action approvals."; }, sub);
   if (kind === "run") {
     const a = agentById(f.dataset.id), follow = followTarget(a, S.runs.filter(r => r.agent_id === a.id));
     act(async () => {
@@ -568,8 +607,8 @@ function startSpace() {
   const active = S.runs?.some(r => !TERMINAL.includes(r.status));
   setTimeout(async () => {
     const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
-    if (!busy && !document.hidden && ["agents", "inbox", "agent", "leaderboard"].includes(route().name) && !typing) {
-      try { const before = JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, Object.keys(S.steps).length]); await load(); if (before !== JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, Object.keys(S.steps).length])) { const open = $$("details[open]").map(d => d.querySelector("summary")?.textContent); render(); $$("details").forEach(d => { if (open.includes(d.querySelector("summary")?.textContent)) d.setAttribute("open", ""); }); } } catch { /* retry next tick */ }
+    if (!busy && !document.hidden && ["work", "agents", "inbox", "agent", "leaderboard"].includes(route().name) && !typing) {
+      try { const before = JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, S["work-queue"], Object.keys(S.steps).length]); await load(); if (before !== JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, S["work-queue"], Object.keys(S.steps).length])) { const open = $$("details[open]").map(d => d.querySelector("summary")?.textContent); render(); $$("details").forEach(d => { if (open.includes(d.querySelector("summary")?.textContent)) d.setAttribute("open", ""); }); } } catch { /* retry next tick */ }
     }
     poll();
   }, active ? 1500 : 4000);

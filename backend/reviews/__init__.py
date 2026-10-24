@@ -223,6 +223,11 @@ def outcome(c, actor, id, data):
         "Task outcome already recorded.",
         409,
     )
+    if data['success'] and run.get('work_item_id'):
+        item = get(c, 'work_items', run['work_item_id'])
+        required = item.get('required_tools', ['search_tickets', 'search_docs', 'create_draft'])
+        successful = {a['tool_id'] for a in all_rows(c, 'actions') if a['run_id'] == run['id'] and a['status'] == 'executed' and a.get('result')}
+        require(run['status'] == 'completed' and all(t in successful for t in required), 'Accept only completed work with all required deliverables.', 409)
     result = put(
         c,
         "outcomes",

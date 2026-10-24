@@ -15,7 +15,7 @@ python server.py
 
 Open **http://localhost:8000**. Database state persists in `data/workforce.sqlite3`. Start one application process per database. Use the VS Code `Run backend` task or run the command from its terminal.
 
-Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 40 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
+Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 45 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
 
 The server binds to localhost. The identity selector is a **local development impersonation facility**, not production login. Identities and roles are resolved from seeded server records; request bodies cannot declare their own roles. This workbench must not be publicly exposed without real authentication and deployment hardening.
 
@@ -100,3 +100,17 @@ References: [Meta tool calling](https://dev.meta.ai/docs/tool-calling), [Meta st
 - Leaderboard: result quality (thumbs up/down on results), approval rate, capability usage and creator usage.
 - `read_url` fetches only public http(s) pages (private/loopback addresses blocked, redirects re-checked). DNS-rebinding is not fully mitigated; do not expose this demo publicly.
 - Design: "Mission control" (dark glass, 3D globe backdrop). See `docs/DESIGN.md`.
+
+
+## Outcome-driven work queue
+
+Open **Team work** (the default home page). Choose **Product launch**, **Growth analysis**, or **Decision brief**, or add a custom job with its source inputs and company constraints. The support queue remains under Other examples.
+
+1. Load a fictional scenario. Repeated loads do not duplicate it.
+2. Hire the suggested specialist or reuse an agent with the required capabilities. Company permissions and connection validation still apply.
+3. Assign an owner and select Demo or an enabled live model. Demo uses explicitly labeled templates; live models produce original tool arguments. Analysis jobs in demo mode require CSV input.
+4. Review restricted actions in Inbox. An Intern asks before every action; an Associate can read and save locally within existing permissions. Nothing is sent, published or purchased.
+5. Review the deliverables together in Team work. Product launch requires analysis, a brief, and a deck before it can be accepted. Outcome review is separate from tool approval.
+6. Mark work accepted or needing correction with notes. Corrected, failed, or cancelled work can be reassigned; the new attempt receives correction notes and prior runs remain in the agent audit trail.
+
+Queue records and assignments persist in SQLite. Metrics show actual outcomes and execution turnaround, including time spent waiting for action review; they do not estimate hours saved. Sample intake is manual, with no email/CRM trigger or external routing integration. Routing labels are recommendations. API operations: `GET/POST /api/work-queue`, `POST /api/work-queue/sample-batch`, and per-item `/assign` and `/review`.

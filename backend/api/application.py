@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException
 from starlette.concurrency import run_in_threadpool
 from ..app import Application
 from ..contracts import Error
-from . import registry, recruiter, runtime, reviews
+from . import registry, recruiter, runtime, reviews, workqueue
 from .schemas import ErrorResponse
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -205,7 +205,7 @@ def create_app(
             500, "internal_error", "Unexpected server error. Check local server logs."
         )
 
-    for router in [registry.router, recruiter.router, runtime.router, reviews.router]:
+    for router in [registry.router, recruiter.router, runtime.router, reviews.router, workqueue.router]:
         api.include_router(router)
 
     @api.get("/api/health", tags=["Health"])

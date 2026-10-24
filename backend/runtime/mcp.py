@@ -2,6 +2,7 @@
 
 import csv
 import html
+from html.parser import HTMLParser
 import io
 import ipaddress
 import json
@@ -114,6 +115,40 @@ def analyze_table(text, question=""):
     }
 
 
+class _PageText(HTMLParser):
+    """Prefer article content and omit navigation, scripts and other page chrome."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.body = []
+        self.article = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+            return
+        attrs = dict(attrs)
+        classes = set(attrs.get("class", "").split())
+        skip = tag in {"script", "style", "noscript", "svg", "head", "nav", "footer", "aside"} or attrs.get("role") == "navigation" or bool(classes & {"mw-editsection", "vector-header", "vector-page-toolbar", "mw-jump-link", "toc", "reflist", "navbox"})
+        article = tag in {"main", "article"} or "mw-parser-output" in classes
+        self.stack.append((tag, skip, article))
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == tag:
+                del self.stack[i:]
+                break
+
+    def handle_data(self, data):
+        if any(item[1] for item in self.stack):
+            return
+        self.body.append(data)
+        if any(item[2] for item in self.stack):
+            self.article.append(data)
+
+    def text(self):
+        return re.sub(r"\s+", " ", " ".join(self.article or self.body)).strip()
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -152,9 +187,9 @@ def read_page(url):
             if e.code in {301, 302, 303, 307, 308} and e.headers.get("Location"):
                 url = urljoin(url, e.headers["Location"])
                 continue
-            raise Error(f"The page returned HTTP {e.code}.", 502, "tool_error")
+            return {"kind": "page_error", "url": url, "error": f"The page returned HTTP {e.code}.", "http_status": e.code}
         except (urllib.error.URLError, TimeoutError, OSError):
-            raise Error("The page could not be reached.", 502, "tool_error")
+            return {"kind": "page_error", "url": url, "error": "The page could not be reached."}
         with response:
             kind = response.headers.get_content_type()
             require(kind in {"text/html", "text/plain", "application/xhtml+xml"}, "Only text pages can be read.", 502, "tool_error")
@@ -162,9 +197,12 @@ def read_page(url):
             charset = response.headers.get_content_charset() or "utf-8"
         text = raw.decode(charset, "replace")
         title = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
-        text = re.sub(r"(?is)<(script|style|noscript|svg|head)[^>]*>.*?</\1>", " ", text)
-        text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", text))
-        text = re.sub(r"\s+", " ", text).strip()
+        if kind != "text/plain":
+            parser = _PageText()
+            parser.feed(text)
+            text = parser.text()
+        else:
+            text = re.sub(r"\s+", " ", text).strip()
         return {
             "kind": "page",
             "url": url,
@@ -262,6 +300,8 @@ def perform(db, name, args, execution_id):
             "is",
         }
         source = TICKETS if name == "search_tickets" else DOCS
+        if name == "search_tickets" and any(t["id"].lower() == query for t in TICKETS):
+            return {"tickets": [t for t in TICKETS if t["id"].lower() == query], "sample_data": True}
         ranked = sorted(
             [
                 (len(terms & set(re.findall(r"[a-z0-9]+", json.dumps(x).lower()))), x)
