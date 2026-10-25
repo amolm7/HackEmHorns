@@ -1,0 +1,37 @@
+# Render Blueprint: one web service built from the Dockerfile.
+# Deploys are triggered by GitHub Actions (see .github/workflows/deploy.yml) once tests pass,
+# so Render's own auto-deploy is off. Secrets are never stored here; paste them in the Render dashboard.
+services:
+  - type: web
+    name: orbit-hire-an-agent
+    runtime: docker
+    plan: free
+    autoDeploy: false
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: AUTH_MODE
+        value: password
+      - key: ALLOW_SIGNUP
+        value: "1"
+      - key: SIGNUPS_PER_HOUR
+        value: "10"
+      - key: SIGNUP_LIMIT
+        value: "300"
+      - key: REQUESTS_PER_MINUTE
+        value: "600"
+      - key: ADMIN_USERNAME
+        value: demo-admin
+      - key: GITHUB_DEMO_REPO
+        sync: false        # owner/repo of your fork, for example your-name/click
+      - key: ADMIN_PASSWORD
+        sync: false        # 12 or more characters
+      - key: GITHUB_PERSONAL_ACCESS_TOKEN
+        sync: false        # fine-grained, one repository, Contents and Metadata read-only
+      - key: MODEL_API_KEY
+        sync: false        # Meta model key
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SIGNUP_CODE
+        sync: false        # optional invite code; leave empty for open sign-up

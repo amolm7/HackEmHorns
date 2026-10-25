@@ -74,6 +74,56 @@ def provision(service, username, password, actor_id):
     return {k: v for k, v in account.items() if k != "password_hash"}
 
 
+RESERVED = {"admin", "administrator", "root", "orbit", "system", "support", "owner"}
+DEMO_ROLES = ["manager", "builder"]
+DEMO_DEPARTMENTS = ["support", "engineering"]
+
+
+def create_member(service, username, password, limit=300):
+    """Self-service demo account: a new org member who is their own manager, so their hires need no second approver."""
+    username = string(username, "username", 100).lower()
+    require(
+        3 <= len(username) <= 32
+        and all(ch.isascii() and (ch.isalnum() or ch in "._-") for ch in username),
+        "Username needs 3–32 letters, numbers, dots, underscores or hyphens.",
+    )
+    hashed = password_hash(password)
+    with service.db.transaction(True) as c:
+        accounts = all_rows(c, "password_accounts")
+        require(len(accounts) < limit, "Sign-up is full for this demo.", 403, "signup_full")
+        require(
+            username not in RESERVED
+            and not any(a["username"] == username for a in accounts)
+            and not any(
+                u["id"] in {username, "u-" + username} or str(u.get("name", "")).lower() == username
+                for u in all_rows(c, "users")
+            ),
+            "That username is taken.",
+            409,
+        )
+        user = {
+            "id": "u-" + username,
+            "name": username,
+            "org_id": "hacktx",
+            "roles": list(DEMO_ROLES),
+            "department_ids": list(DEMO_DEPARTMENTS),
+            "self_service": True,
+        }
+        put(c, "users", user)
+        account = {
+            "id": digest(username),
+            "username": username,
+            "actor_id": user["id"],
+            "org_id": user["org_id"],
+            "password_hash": hashed,
+            "active": True,
+            "created_at": now(),
+        }
+        put(c, "password_accounts", account)
+        audit(c, user, "auth.signed_up", account["id"])
+    return user
+
+
 class Authentication:
     def __init__(self, service):
         self.service = service
@@ -104,6 +154,7 @@ class Authentication:
             )
         self.lock = threading.Lock()
         self.attempts = {}
+        self.signups = {}
         self.dummy_hash = (
             password_hash(secrets.token_urlsafe(24))
             if self.mode == "password"
@@ -120,8 +171,48 @@ class Authentication:
     def close(self):
         pass
 
+    @property
+    def signup_enabled(self):
+        flag = str(self.service.config.get("ALLOW_SIGNUP", "")).strip().lower()
+        return self.mode == "password" and flag in {"1", "true", "yes", "on"}
+
     def config(self):
-        return {"mode": self.mode}
+        return {
+            "mode": self.mode,
+            "signup": self.signup_enabled,
+            "invite_code": self.signup_enabled and bool(self.service.config.get("SIGNUP_CODE")),
+        }
+
+    def signup(self, username, password, code, address):
+        require(self.signup_enabled, "Sign-up is not enabled.", 403, "signup_disabled")
+        expected = str(self.service.config.get("SIGNUP_CODE", ""))
+        if expected:
+            require(
+                hmac.compare_digest((code or "").encode(), expected.encode()),
+                "That invite code is not right.",
+                403,
+                "invite_required",
+            )
+        current = int(time.monotonic() // 3600)
+        per_hour = int(self.service.config.get("SIGNUPS_PER_HOUR", 10))
+        with self.lock:
+            window, count = self.signups.get(address, (current, 0))
+            if window != current:
+                window, count = current, 0
+            require(count < per_hour, "Too many sign-ups from this address. Try again later.", 429, "rate_limited")
+            self.signups = {k: v for k, v in self.signups.items() if v[0] == current}
+            self.signups[address] = (current, count + 1)
+        require(
+            self.login_slots.acquire(blocking=False),
+            "Sign-up is busy. Try again shortly.",
+            429,
+            "rate_limited",
+        )
+        try:
+            create_member(self.service, username, password, int(self.service.config.get("SIGNUP_LIMIT", 300)))
+        finally:
+            self.login_slots.release()
+        return self.login(username, password, address)
 
     def limit_login(self, username, address):
         current = int(time.monotonic() // 300)

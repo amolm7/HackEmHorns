@@ -64,6 +64,21 @@ class SkillTests(unittest.TestCase):
         self.assertEqual(slides[1]["stats"][0], {"value": "38%", "label": "faster"})
         self.assertEqual(slides[1]["notes"], "say this")
 
+    def test_richer_layouts_section_quote_steps_and_split(self):
+        outline = ("# Deck\n> A promise\n# Part one\n# Words\nquote: Make it simple | Ada\n# How\n1. Gather\n2) Draft\n3. Ship\n"
+                   "# Many\n- a\n- b\n- c\n- d\n- e\n# Few\n- a\n- b")
+        slides = mcp.parse_outline(outline)
+        self.assertEqual([s["layout"] for s in slides], ["cover", "section", "quote", "steps", "split", "list"])
+        self.assertEqual(slides[2]["quote"], {"text": "Make it simple", "by": "Ada"})
+        self.assertEqual(slides[3]["bullets"], ["Gather", "Draft", "Ship"])  # numbers are stripped, order is kept
+        self.assertEqual(mcp.parse_outline("# Only title")[0]["layout"], "cover")  # a lone title is still a cover
+        self.assertEqual(mcp.parse_outline("# A\n- x\n# 2026 plan\n- y")[1]["layout"], "list")  # a year is not a step
+
+    def test_new_themes_are_accepted_and_unknown_ones_fall_back(self):
+        for theme, expected in (("ocean", "ocean"), ("Dusk", "dusk"), ("neon", "aurora")):
+            r = mcp.perform(self.app.db, "create_slideshow", {"title": "T", "outline": "# A\n- b", "theme": theme}, "exec-" + theme)
+            self.assertEqual(r["theme"], expected)
+
     def test_meeting_invite_has_times_attendees_and_ics_and_is_not_sent(self):
         r = mcp.meeting_result({"title": "Kickoff, Q4", "start": "2026-11-03T14:00", "duration_minutes": "45",
                                 "attendees": "sam@acme.com, Lee, sam@acme.com", "agenda": "- Goal\n- Decide"})

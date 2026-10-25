@@ -3,6 +3,9 @@ from .contracts import roles, department_access, digest, now, require, string, u
 from .db import all_rows, get, put, audit
 from .github import GITHUB_TOOLS, GITHUB_SKILL, repository_name
 
+DEFAULT_TOOL_NAME = "Read GitHub repositories"
+DEFAULT_TOOL_DESCRIPTION = "Read a repository's files and open issues, then explain its purpose, code and next steps."
+
 
 def github_status(c, app, actor):
     connections = [row for row in all_rows(c, "connections")
@@ -41,8 +44,12 @@ def connect_github(app, actor_id, data):
             "validated_at": now(),
         })
         audit(c, actor, "github.connected", ident, {"department_id": department, "repository": repository})
+        # Once the connector exists its tool shows up in Library by itself; more named tools can still be added.
+        if not any(row["id"] == "github-reading" for row in all_rows(c, "capabilities")):
+            publish_github(c, app, actor, {"department_id": department, "name": DEFAULT_TOOL_NAME,
+                                           "description": DEFAULT_TOOL_DESCRIPTION})
         return {"status": "connected", "repository": repository,
-                "message": "GitHub connector prepared. Create a named tool from the bottom of Library."}
+                "message": "GitHub connector prepared. Read GitHub repositories is now in the Library tools."}
 
 
 def publish_github(c, app, actor, data):

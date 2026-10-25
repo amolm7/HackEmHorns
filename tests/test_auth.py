@@ -65,15 +65,15 @@ class PasswordAuthTests(unittest.TestCase):
         csrf = response.json()["csrf_token"]
         self.assertEqual(
             self.client.post(
-                "/api/work-queue/sample-batch",
-                json={},
+                "/api/agents/quick-create",
+                json={"description": "Summarize notes", "name": "Notes"},
                 headers={"Idempotency-Key": "a"},
             ).status_code,
             403,
         )
         good = self.client.post(
-            "/api/work-queue/sample-batch",
-            json={},
+            "/api/agents/quick-create",
+            json={"description": "Summarize notes", "name": "Notes"},
             headers={"Idempotency-Key": "a", "X-CSRF-Token": csrf},
         )
         self.assertEqual(good.status_code, 200, good.text)
@@ -183,6 +183,9 @@ class PasswordAuthTests(unittest.TestCase):
             self.assertEqual(
                 client.get("/", headers={"Host": "attacker.test"}).status_code, 403
             )
+            # Only the liveness probe is exempt, so a host's internal health check can pass.
+            self.assertEqual(client.get("/api/health", headers={"Host": "10.0.0.5:10000"}).status_code, 200)
+            self.assertEqual(client.get("/api/ready", headers={"Host": "10.0.0.5:10000"}).status_code, 403)
             self.assertEqual(
                 client.get(
                     "/api/me", headers={"Cookie": "agent_session=spoofed"}

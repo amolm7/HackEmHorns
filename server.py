@@ -19,6 +19,16 @@ def config():
 
 
 settings = config()
+# Render and similar hosts publish the public URL themselves; production mode needs it as the trusted origin.
+if not settings.get("APP_ORIGIN") and settings.get("RENDER_EXTERNAL_URL"):
+    settings["APP_ORIGIN"] = settings["RENDER_EXTERNAL_URL"]
+if settings.get("RENDER") and not settings.get("APP_ENV"):
+    settings["APP_ENV"] = "production"
+if settings.get("APP_ENV") == "production":
+    settings.setdefault("AUTH_MODE", "password")
+    from backend import bootstrap
+
+    print("Bootstrap:", bootstrap.run(settings, settings.get("DATABASE_PATH", str(ROOT / "data" / "workforce.sqlite3"))), flush=True)
 app = create_app(settings=settings)
 
 if __name__ == "__main__":
@@ -35,4 +45,13 @@ if __name__ == "__main__":
         + " · Local workspace",
         flush=True,
     )
-    uvicorn.run(app, host="127.0.0.1", port=port, workers=1)
+    # Behind a host's proxy every request arrives from the proxy; trust X-Forwarded-For so per-client limits work.
+    behind_proxy = bool(settings.get("TRUST_PROXY") or settings.get("RENDER"))
+    uvicorn.run(
+        app,
+        host=settings.get("HOST", "0.0.0.0" if behind_proxy else "127.0.0.1"),
+        port=port,
+        workers=1,
+        proxy_headers=behind_proxy,
+        forwarded_allow_ips="*" if behind_proxy else None,
+    )

@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 import logging
+import os
 from pathlib import Path
 import secrets
 import time
@@ -17,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from ..app import Application
 from ..auth import Authentication, COOKIE, SESSION_SECONDS
 from ..contracts import Error
-from . import registry, recruiter, runtime, reviews, workqueue
+from . import registry, recruiter, runtime, reviews
 from .schemas import ErrorResponse, Input
 from pydantic import Field, ConfigDict
 from typing import Annotated
@@ -118,7 +119,9 @@ class LocalTransportPolicy:
         production = self.settings.get("APP_ENV") == "production"
         if production:
             valid = bool(origin) and host == urlsplit(origin).netloc
-        if not valid:
+        # A host's own health probe does not send the public Host header; the liveness route leaks nothing.
+        probe = scope["method"] == "GET" and scope["path"] == "/api/health"
+        if not valid and not probe:
             return await reject(403, "forbidden_origin", "Untrusted Host.")
         suffix = ":" + str(port) if port is not None else ""
         origins = (
@@ -286,7 +289,6 @@ def create_app(
         recruiter.router,
         runtime.router,
         reviews.router,
-        workqueue.router,
     ]:
         api.include_router(router)
 
@@ -306,6 +308,32 @@ def create_app(
         token, result = request.app.state.auth.login(
             body.username,
             body.password,
+            request.client.host if request.client else "unknown",
+        )
+        response = JSONResponse(result)
+        response.set_cookie(
+            request.app.state.auth.cookie_name,
+            token,
+            max_age=SESSION_SECONDS,
+            httponly=True,
+            secure=request.app.state.auth.production,
+            samesite="strict",
+            path=request.app.state.auth.cookie_path,
+        )
+        return response
+
+    class Signup(Input):
+        model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=False)
+        username: Annotated[str, Field(min_length=1, max_length=100)]
+        password: Annotated[str, Field(min_length=1, max_length=256)]
+        code: Annotated[str, Field(max_length=100)] = ""
+
+    @api.post("/api/auth/signup", tags=["Authentication"])
+    def signup(body: Signup, request: Request):
+        token, result = request.app.state.auth.signup(
+            body.username,
+            body.password,
+            body.code,
             request.client.host if request.client else "unknown",
         )
         response = JSONResponse(result)
@@ -367,7 +395,9 @@ def create_app(
 
     @api.get("/api/health", tags=["Health"])
     def health() -> dict:
-        return {"status": "ok", "transport": "fastapi"}
+        # The host's commit id lets a deploy check confirm the new build is the one answering.
+        return {"status": "ok", "transport": "fastapi",
+                "version": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("APP_VERSION") or "dev"}
 
     @api.get("/docs", include_in_schema=False)
     def swagger_docs():

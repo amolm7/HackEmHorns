@@ -8,6 +8,12 @@ This review covers the current working tree, including the uncommitted GitHub in
 
 The request was to investigate and prepare a backlog. These tickets describe open work, not fixes implemented by this review. Do not mark a ticket complete because the existing tests pass.
 
+## Status update (October 25, 2026, branch `feature/reliability-and-cleanup`)
+
+Addressed in code with tests (`tests/test_reliability.py`): **ISS-001** (tool calls are reserved for the requested deliverable; the model is told its budget; extra reads are answered with `budget_reserved`), **ISS-002** (a failed or cancelled task never blocks its conversation or agent), **ISS-003** (a claimed deliverable must be backed by an executed save action; one repair, then `deliverable_missing`), **ISS-004** (setup prompt no longer says GitHub is disconnected), **ISS-005** (typed `ApiError`, per-code recovery text and a Try again button on failed tasks, support ID for internal errors), **ISS-006** (transient GitHub errors are classified and retried with backoff), **ISS-007** (a guessed missing file is returned as a recoverable `path_not_found` result), **ISS-008** (GitHub needs a live model at create and add time, enforced server-side and mirrored in the UI), **ISS-009** (old tool results are compacted instead of rejecting follow-ups), **ISS-010** (messages point at the admin preparation step), and **ISS-018** (the setup model call runs before the write transaction, with a hard `SETUP_TIMEOUT`; the browser also gives up after 110 seconds instead of hanging). The Team jobs feature (work queue) and its deliverable-quality checks were removed.
+
+Still open: ISS-011 (credential rotation, manual), ISS-012 (handoff is done once this branch is merged), and all P2 tickets except ISS-018.
+
 ## Findings that matter first
 
 The reported **“Maximum tool calls reached”** failure has a concrete cause:

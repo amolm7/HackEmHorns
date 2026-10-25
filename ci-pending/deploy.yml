@@ -1,0 +1,40 @@
+name: Deploy
+# Every push to main: run the whole test workflow, and only if it passes tell Render to deploy that exact
+# commit, wait for it to answer, then exercise the live site (sign-up, hire, run) from the outside.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # never interrupt a deploy that is already running
+
+jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
+  deploy:
+    name: Deploy to Render and smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production   # holds RENDER_DEPLOY_HOOK_URL; add PRODUCTION_URL as a variable here too
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Ask Render to build this commit
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then echo "::error::Add the RENDER_DEPLOY_HOOK_URL secret to the production environment."; exit 1; fi
+          curl -fsS -X POST "${HOOK}&ref=${GITHUB_SHA}"
+      - name: Wait for the new build, then smoke test the live site
+        env:
+          URL: ${{ vars.PRODUCTION_URL }}
+        run: |
+          if [ -z "$URL" ]; then echo "::error::Add PRODUCTION_URL (for example https://orbit-hire-an-agent.onrender.com) as a variable on the production environment."; exit 1; fi
+          python scripts/smoke_live.py "$URL" --wait 900 --expect-version "$GITHUB_SHA"

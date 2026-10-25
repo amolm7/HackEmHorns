@@ -29,9 +29,7 @@ Disable revokes sessions and removes the actor's permission to advance queued jo
 
 ## Execution guarantees
 
-- Workflow jobs advertise and execute only the tools required for that workflow, within the agent's existing capability and connection permissions.
 - Deliverable checks verify presence, slide count/content, required document headings/length, original CSV identity, and ticket/draft identity. They do not verify factual accuracy or compliance with arbitrary prose rules. Managers review those.
-- A live job gets at most one automatic deliverable repair attempt. Failed reports are preserved in its trace and visible in Team jobs.
 - Revision attempts receive prior outputs and manager feedback. The original brief and data remain authoritative. Attempts retain separate run IDs and prior outputs are not overwritten.
 - Queue creation, sample loading, assignment and outcome review require `Idempotency-Key`. Retry the identical payload with the same key; changing the payload returns a conflict. Permission changes also invalidate replay. Legacy keys created before this release cannot be replayed.
 - Temporary provider timeouts, 408, 429 and selected 5xx failures receive bounded scheduled retries. Retry state survives restarts; cancellation remains available while waiting. Permanent authorization failures are not retried. Repeating a model request may incur provider charges even if the earlier response was lost.
@@ -40,7 +38,7 @@ Disable revokes sessions and removes the actor's permission to advance queued jo
 
 ## Worker and storage
 
-`WORKER_CONCURRENCY` defaults to 2 (range 1–8). `MODEL_MAX_RETRIES` defaults to 3 (range 0–5). `MAX_ACTIVE_RUNS` defaults to 50 per organization and `MAX_ACTIVE_RUNS_PER_USER` to 10, including jobs waiting for approval. New submissions receive 429 when full. `MAX_RUN_OUTPUT_TOKENS` defaults to 20000 and prevents further model calls after the reported output-token budget is reached (the last call may cross that threshold). These bounds do not replace provider-side billing limits. One scheduler owns each SQLite database using an OS lock. Run **one Uvicorn process**, on Linux or macOS, per database. Worker threads can execute independent jobs concurrently; a job cannot be scheduled twice by that scheduler. Stop waits for in-flight calls before closing MCP services and releasing the lock.
+`WORKER_CONCURRENCY` defaults to 2 (range 1–8). `MODEL_MAX_RETRIES` defaults to 3 (range 0–5). `MODEL_TIMEOUT` is the per-request provider timeout in seconds (default 60, range 10–180). `SETUP_TIMEOUT` is the hard limit for the model call that tailors a new agent's instructions (default 45 seconds). That call runs before any database write begins, so a slow provider cannot block other requests. `MAX_ACTIVE_RUNS` defaults to 50 per organization and `MAX_ACTIVE_RUNS_PER_USER` to 10, including jobs waiting for approval. New submissions receive 429 when full. `MAX_RUN_OUTPUT_TOKENS` defaults to 20000 and prevents further model calls after the reported output-token budget is reached (the last call may cross that threshold). These bounds do not replace provider-side billing limits. One scheduler owns each SQLite database using an OS lock. Run **one Uvicorn process**, on Linux or macOS, per database. Worker threads can execute independent jobs concurrently; a job cannot be scheduled twice by that scheduler. Stop waits for in-flight calls before closing MCP services and releasing the lock.
 
 SQLite uses WAL, transactions, additive indexes and schema version 1. Database and backup files use owner-only permissions. JSON documents remain compatible with existing data. For horizontal scaling, migrate to a shared database and durable distributed job queue; do not run several workers against a shared SQLite file or network filesystem.
 
@@ -65,6 +63,10 @@ Backups refuse to overwrite existing paths and run SQLite integrity checks. They
 
 For an actual restore: stop the application; preserve the current database and its WAL/SHM files together in a separate recovery directory; copy a verified backup to a **new** database path; set `DATABASE_PATH` to that new path; start and verify it. Never replace a live SQLite database or mix a restored database with stale WAL files. A restored backup can contain sessions valid at backup time; before reopening access, revoke its sessions (`UPDATE auth_sessions SET body=json_set(body,'$.revoked',json('true'));`) from a trusted SQLite connection.
 
+## GitHub token
+
+Agents read GitHub with one server-side token (`GITHUB_PERSONAL_ACCESS_TOKEN`, fine-grained, Contents and Issues read on selected repositories), so every user can read whatever it can read. Use a bot or admin account you can revoke, keep it out of Git, and revoke it when a demo ends. Rotating it requires an admin to prepare the connector again.
+
 ## Deployment configuration
 
 ```env
@@ -80,7 +82,13 @@ Production startup rejects development authentication, an HTTP/missing origin, o
 
 The Dockerfile runs as UID 10001, excludes local secrets/data from its build context, and has a readiness health check. Build and mount a persistent volume, provision accounts using `scripts/create_user.py` against that volume, then start the production container behind your TLS proxy. Bind the container port to loopback until the proxy is configured. The Docker image has not been built in this workstation session; validate it and pin a tested base-image digest in your deployment pipeline.
 
-`.github/workflows/tests.yml` runs the backend tests and JavaScript syntax checks on pushes and PRs. The pipeline itself must be observed after pushing; local checks do not prove a GitHub Actions run passed.
+## Testing and CI
+
+Run locally: `python -m unittest discover -s tests -q`, `node tests/test_frontend_contracts.js`, and `python scripts/smoke.py` (boots the real server on a throwaway database and exercises every offline tool through the API).
+
+`.github/workflows/tests.yml` runs three jobs on every push and PR: unit and contract tests (plus `pip_audit`), the smoke script, and a Docker build that must reach `/api/ready`. `nightly-integrations.yml` runs live checks (for example Gemini) using secrets in a GitHub Environment named `integrations`, and opens an issue on failure; it never gates merges.
+
+**Adding a tool or integration:** register it in `backend/registry`; `tests/test_registry_contract.py` then fails until the tool has a valid schema, a consistent risk level (`WRITE_TOOLS` for anything that saves) and an entry in `FIXTURES` (or `NETWORK` if it needs the internet, in which case add a mocked test). `scripts/smoke.py` picks up new capabilities automatically. Make the three jobs required in GitHub branch protection for `main`. The pipeline itself must be observed after pushing; local checks do not prove a GitHub Actions run passed.
 
 ## Before handling real company data
 

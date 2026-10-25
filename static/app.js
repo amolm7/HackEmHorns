@@ -41,6 +41,9 @@ const ICONS = {
   tasks: ["M5 6l1.5 1.5L9 5", "M12 6.5h8", "M5 12l1.5 1.5L9 11", "M12 12.5h8", "M5 18l1.5 1.5L9 17", "M12 18.5h8"],
   download: ["M12 4v11", "M7 11l5 5 5-5", "M5 20h14"],
   spark: ["M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"],
+  attach: ["M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L14 7"],
+  out: ["M7 17L17 7", "M8 7h9v9"],
+  files: ["M4 5h6l2 2h8v12H4z"],
 };
 const icon = (name, cls = "") => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${(ICONS[name] || ICONS.tool).map(d => `<path d="${d}"/>`).join("")}</svg>`;
 
@@ -49,9 +52,17 @@ let csrfToken = null, authMode = "development", authReady = false;
 let user = sessionStorage.getItem("dev-user") || "pavan";
 let S = { steps: {}, conversations: {} };
 let busy = false;
-const forge0 = () => ({ caps: [], text: "", name: "", mode: null, more: false, target: "" });
+const forge0 = () => ({ caps: [], text: "", name: "", mode: null, more: false, target: "", autoName: false });
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const coarse = () => typeof matchMedia === "function" && matchMedia("(pointer:coarse)").matches;
 let forge = forge0();
-const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, drafts: {}, repositories: {}, newTool: {source: null, name: "", description: "", department: null}, metrics: {}, revise: {}, pulse: 0, stick: true };
+const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, drafts: {}, repositories: {}, newTool: {source: null, name: "", description: "", department: null}, metrics: {}, revise: {}, pulse: 0, stick: true, caption: null, dragFrom: null, files: null, allPeople: false };
+
+class ApiError extends Error {
+  constructor(message, info = {}) { super(message); this.name = "ApiError"; Object.assign(this, info); }
+}
+const errText = e => e?.code === "internal_error" && e.requestId ? `${e.message} (support ID ${String(e.requestId).slice(0, 8)})` : e?.message || "Something went wrong.";
+const API_WAIT = { GET: 30000, POST: 110000 };
 
 async function api(path, method = "GET", body) {
   const headers = authMode === "password" ? (csrfToken ? { "X-CSRF-Token": csrfToken } : {}) : { "X-Dev-User": user };
@@ -63,15 +74,25 @@ async function api(path, method = "GET", body) {
     headers["Idempotency-Key"] = sessionStorage.getItem(replayKey) || crypto.randomUUID();
     sessionStorage.setItem(replayKey, headers["Idempotency-Key"]);
   }
-  const res = await fetch("/api/" + path, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  // Never wait forever: a stalled server must not leave the whole page stuck on "Working…".
+  const guard = new AbortController(), timer = setTimeout(() => guard.abort(), API_WAIT[method] || API_WAIT.POST);
+  let res;
+  try {
+    res = await fetch("/api/" + path, { method, headers, signal: guard.signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  } catch (e) {
+    throw new ApiError(e.name === "AbortError"
+      ? "The server took too long to answer. It may still finish, so check the agent before trying again."
+      : "Couldn't reach the server. Check that it is running.", { code: e.name === "AbortError" ? "client_timeout" : "network" });
+  } finally { clearTimeout(timer); }
   if (replayKey && res.status < 500) sessionStorage.removeItem(replayKey);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Error(data.error?.message || `Request failed (${res.status}).`);
+  if (!res.ok) throw new ApiError(data.error?.message || `Request failed (${res.status}).`,
+    { status: res.status, code: data.error?.code, details: data.error?.details, requestId: res.headers.get("X-Request-ID") });
   return data;
 }
 
 async function load() {
-  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "marketplace", "leaderboard", "work-queue", "integrations/github"];
+  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "marketplace", "leaderboard", "integrations/github"];
   const vals = await Promise.all(paths.map(p => api(p)));
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
   if (authMode === "password") { user = S.me.id; $("#identity").disabled = true; if (!$("#sign-out")) { const b = document.createElement("button"); b.id = "sign-out"; b.className = "btn small"; b.textContent = "Sign out"; b.setAttribute("aria-label", "Sign out"); b.addEventListener("click", async () => { await api("auth/logout", "POST", {}); location.reload(); }); $("#identity").closest("label").after(b); } }
@@ -79,7 +100,7 @@ async function load() {
   S.policy = await api("policy").catch(() => ({ approval_scope: "agent" }));
   S.approvals = await api("approvals").catch(() => []);
   S.proposals = await api("recruiter/proposals").catch(() => []);
-  if (route().name === "agent") await loadSteps();
+  if (route().name === "agent" && UUID.test(route().id || "")) { try { await loadSteps(); } catch { S.runs = await api("runs"); } }
   else S.runs = await api("runs");
   sidebar();
   syncActivityStream();
@@ -96,13 +117,13 @@ function applyActivity(snapshot) {
 }
 async function loadSteps() {
   const r = route();
-  if (r.name === "agent") applyActivity(await api(`agents/${r.id}/activity`));
+  if (r.name === "agent" && UUID.test(r.id || "")) applyActivity(await api(`agents/${r.id}/activity`));
 }
 
 /* One authenticated status stream for the open chat; no model-token streaming. */
 let activityConnection = null;
 function syncActivityStream() {
-  const id = route().name === "agent" && !document.hidden ? route().id : null;
+  const id = route().name === "agent" && UUID.test(route().id || "") && !document.hidden ? route().id : null;
   const key = id ? user + ":" + id : null;
   if (activityConnection?.key === key) return;
   activityConnection?.controller.abort();
@@ -195,10 +216,10 @@ async function act(fn, el) {
   const original = el?.innerHTML;
   if (el?.tagName === "BUTTON" && !el.classList.contains("icon-only") && !el.classList.contains("send")) el.textContent = "Working…";
   el?.setAttribute("aria-busy", "true");
-  const btns = $$("button", el?.closest("form") || el?.parentElement || document).filter(b => !b.disabled);
+  const btns = el ? $$("button", el.closest("form") || el.parentElement || el).filter(b => !b.disabled) : [];
   btns.forEach(b => { b.disabled = true; });
   try { const msg = await fn(); await load(); render(); if (msg) toast(msg); }
-  catch (e) { await load().catch(() => {}); render(); toast(e.message, true); }
+  catch (e) { await load().catch(() => {}); render(); toast(errText(e), true); }
   finally { busy = false; if (el?.isConnected && original !== undefined) { el.innerHTML = original; el.removeAttribute("aria-busy"); } btns.forEach(b => { if (b.isConnected) b.disabled = false; }); }
 }
 
@@ -208,10 +229,10 @@ function route() {
   const alias = { create: "new", hire: "new", work: "new", home: "new", agents: "new", arcade: "new", queue: "inbox", approvals: "inbox", scores: "leaderboard", shop: "library" };
   return { name: alias[raw] || raw || "new", id };
 }
-const TITLES = { new: "New agent", inbox: "Approvals", leaderboard: "Leaderboard", library: "Library", jobs: "Team jobs", employees: "Employees" };
+const TITLES = { new: "New agent", inbox: "Approvals", files: "Files", leaderboard: "Leaderboard", library: "Library", employees: "Employees" };
 function render() {
   const r = route();
-  const views = { new: forgeScreen, agent: chatScreen, inbox: inboxScreen, leaderboard: leaderboardScreen, library: libraryScreen, jobs: jobsScreen, employees: employeesScreen };
+  const views = { new: forgeScreen, agent: chatScreen, inbox: inboxScreen, files: filesScreen, leaderboard: leaderboardScreen, library: libraryScreen, employees: employeesScreen };
   document.body.dataset.view = r.name;
   $("#view").innerHTML = (views[r.name] || forgeScreen)(r.id);
   document.title = (r.name === "agent" ? agentById(r.id)?.name || "Agent" : TITLES[r.name] || "New agent") + " · ORBIT";
@@ -241,7 +262,7 @@ function agentMenu(a) {
 function sidebar() {
   stableSidebar("#identity", opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]), user));
   stableSidebar("#identity-menu", dropdown({ field: "identity", value: user, label: authMode === "password" ? "Signed in account" : "Switch identity", cls: "up" + (authMode === "password" ? " locked" : ""), options: S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]) }));
-  const pending = S.approvals.filter(a => a.status === "pending").length + S.proposals.filter(p => p.status === "draft").length, jobs = (S["work-queue"] || []).length;
+  const pending = S.approvals.filter(a => a.status === "pending").length + S.proposals.filter(p => p.status === "draft").length;
   // Starting a conversation moves its agent to the top; background completions
   // do not displace the agent the user most recently worked with.
   const lastUsed = new Map();
@@ -274,8 +295,8 @@ function sidebar() {
   stableSidebar("#agent-list", agentList);
   const managerNav = $("#manager-nav");
   managerNav.hidden = !S.me.roles.some(r => ["manager", "admin"].includes(r));
-  stableSidebar("#manager-nav", managerNav.hidden ? "" : `<a class="employees-nav" href="#/employees" data-route="employees">${icon("jobs")}<span><b>Employees</b><small>Team overview & usage</small></span><span aria-hidden="true">↗</span></a>`);
-  stableSidebar("#side-links", [["inbox", "inbox", "Approvals", pending], ["leaderboard", "trophy", "Leaderboard", 0], ["library", "library", "Library", 0], ["jobs", "jobs", "Team jobs", jobs]].map(([r, ic, t, n]) => `<li><a href="#/${r}" data-route="${r}">${icon(ic)}<span class="nm">${t}</span>${n ? `<span class="count ${r === "inbox" ? "warn" : ""}">${n}</span>` : ""}</a></li>`).join(""));
+  stableSidebar("#manager-nav", managerNav.hidden ? "" : `<a class="employees-nav" href="#/employees" data-route="employees">${icon("jobs")}<span><b>Employees</b><small>Team overview & usage</small></span>${icon("out", "sm")}</a>`);
+  stableSidebar("#side-links", [["inbox", "inbox", "Approvals", pending], ["files", "files", "Files", 0], ["leaderboard", "trophy", "Leaderboard", 0], ["library", "library", "Library", 0]].map(([r, ic, t, n]) => `<li><a href="#/${r}" data-route="${r}">${icon(ic)}<span class="nm">${t}</span>${n ? `<span class="count ${r === "inbox" ? "warn" : ""}">${n}</span>` : ""}</a></li>`).join(""));
   sidebarActive();
 }
 function sidebarActive() {
@@ -304,35 +325,73 @@ const ROLES = [
   { id: "anchor", name: "Anchor", title: "Action Planner", caps: ["plan-tasks"], text: "Turn meeting notes and plans into action items. Give every task an owner and a due date when the notes mention them, and mark anything unclear as to be confirmed. Keep each task to one line." },
 ];
 const roleChips = picked => { const ids = picked.map(c => c.id), fits = r => r.caps.some(c => ids.includes(c)); return [...ROLES.filter(fits), ...ROLES.filter(r => !fits(r))].slice(0, 4); };
+const nameTaken = name => S.agents.some(a => a.name.trim().toLowerCase() === String(name).trim().toLowerCase());
+const uniqueName = base => { if (!nameTaken(base)) return base; for (let n = 2; ; n++) if (!nameTaken(`${base} ${n}`)) return `${base} ${n}`; };
+const isGithubCap = c => !!c?.tools?.some(t => t.startsWith("github_"));
+/* One place decides whether Create is allowed, and says why not in plain words. */
+function createState() {
+  const target = forge.target && agentById(forge.target);
+  const picked = forge.caps.map(capById).filter(Boolean);
+  const needsLive = picked.some(isGithubCap);
+  const blocked = needsLive && (target ? (profile(target.model_profile_id)?.id || "demo") === "demo" : forge.mode === "demo");
+  let why = "";
+  if (!canHire()) why = "Your role can't create agents.";
+  else if (blocked) why = "GitHub needs a live model.";
+  else if (target) why = forge.caps.length ? "" : "Pick a tool to add.";
+  else if (!forge.name.trim()) why = "Name your agent to continue.";
+  else if (nameTaken(forge.name)) why = `An agent called ${forge.name.trim()} already exists. Pick another name.`;
+  else if (!forge.caps.length && !forge.text.trim()) why = "Add a tool or write instructions.";
+  return { target, picked, needsLive, blocked, why, ok: !why };
+}
+function syncCreate() {
+  const go = $("[data-act='create']"); if (!go) return;
+  const s = createState(); go.disabled = !s.ok;
+  const why = $("#create-why"); if (why) why.textContent = s.why;
+  $$(".starter").forEach(b => b.setAttribute("aria-pressed", String(ROLES.find(r => r.id === b.dataset.id)?.text === forge.text)));
+}
+const toolCaption = () => { const c = ui.caption && capById(ui.caption); return c ? `${short(c)}: ${c.description}` : coarse() ? "Tap a tool to add it. Tap it on the core to remove it." : "Drag a tool onto the core, or press Enter on it. Drag it back down to remove it."; };
 function forgeScreen() {
   if (!forge.mode) forge.mode = S["model-profiles"].find(m => m.id !== "demo" && m.enabled)?.id || "demo";
   const work = S.capabilities.filter(c => (c.group || "Workspace") !== "Support sandbox"), extra = S.capabilities.filter(c => c.group === "Support sandbox");
   const picked = forge.caps.map(capById).filter(Boolean), target = forge.target && agentById(forge.target);
-  const tool = c => `<button type="button" class="tool ${forge.caps.includes(c.id) ? "used" : ""}" draggable="true" data-act="tool" data-id="${esc(c.id)}" aria-pressed="${forge.caps.includes(c.id)}" title="${esc(c.description)}">${icon(c.icon || "tool")}<span>${esc(short(c))}</span></button>`;
+  const free = c => !forge.caps.includes(c.id);
+  const tool = c => `<button type="button" class="tool" draggable="true" data-act="tool" data-id="${esc(c.id)}" aria-pressed="false" title="${esc(c.description)}">${icon(c.icon || "tool")}<span>${esc(short(c))}</span></button>`;
   const roles = roleChips(picked);
-  return `<div class="forge-screen">
+  const needsLive = picked.some(isGithubCap);
+  if (!target && needsLive && forge.mode === "demo") { const live = S["model-profiles"].find(m => m.id !== "demo" && m.enabled); if (live) forge.mode = live.id; }
+  const state = createState(), blocked = state.blocked;
+  const blockNote = blocked ? `<p class="note warn-note">GitHub reading needs a live model (Meta or Gemini). ${target ? `${esc(target.name)} uses the Demo model, so create a new agent for GitHub.` : "Pick one in the model menu. Demo can't read repositories."}</p>` : "";
+  const beltTools = work.filter(free), moreTools = extra.filter(free);
+  const belt = beltTools.map(tool).join("") + (forge.more ? moreTools.map(tool).join("") : moreTools.length ? `<button type="button" class="tool ghost" data-act="more-tools" title="Sample support tools: tickets, help documents, reply drafts">${icon("more")}<span>More tools</span></button>` : "");
+  return `<div class="forge-screen ${target ? "teach" : ""}">
     <h1 class="display">${words(target ? "Teach " + target.name + " something new" : "Build an agent")}</h1>
-    <p class="lede">${target ? "Drop a new tool on the core." : "Drag the tools it needs onto the core. Then write its instructions."}</p>
+    <p class="lede">${target ? (coarse() ? "Tap a new tool to add it." : "Drop a new tool on the core.") : (coarse() ? "Tap the tools it needs to add them to the core. Then write its instructions." : "Drag the tools it needs onto the core. Then write its instructions.")}</p>
     <div class="forge">
       <div class="core-zone ${picked.length ? "armed" : ""} p${ui.pulse % 2}" data-drop="core" aria-label="Tools your agent will have">
         <div class="halo"></div>
         <div class="core">${orb(target ? target.id : "forge", { size: 120, level: picked.length ? "associate" : "intern", cls: "big" })}</div>
-        <ul class="orbit n${picked.length}">${picked.map((c, i) => `<li class="slot s${i}"><button type="button" class="tool on" data-act="tool" data-id="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">${icon(c.icon || "tool")}<span>${esc(short(c))}</span></button></li>`).join("")}</ul>
-        ${picked.length ? "" : `<span class="drop-hint">Drop tools here</span>`}
+        <ul class="orbit n${picked.length}">${picked.map((c, i) => `<li class="slot s${i}"><button type="button" class="tool on" draggable="true" data-from="orbit" data-act="tool" data-id="${esc(c.id)}" aria-label="Remove ${esc(c.name)}" title="Click, or drag back down, to remove">${icon(c.icon || "tool")}<span>${esc(short(c))}</span></button></li>`).join("")}</ul>
+        ${picked.length ? "" : `<span class="drop-hint">${coarse() ? "Tap tools to add them" : "Drop tools here"}</span>`}
       </div>
-      <div class="belt" role="group" aria-label="Tools. Drag onto the core, or click to add.">${work.map(tool).join("")}${forge.more ? extra.map(tool).join("") : extra.length ? `<button type="button" class="tool ghost" data-act="more-tools">${icon("more")}<span>More</span></button>` : ""}</div>
+      <div class="belt" data-drop="belt" role="group" aria-label="Tools. Drag onto the core, or click to add.">${belt || `<span class="note">Every tool is on the core.</span>`}</div>
+      <p class="tool-caption" id="tool-caption" aria-live="polite">${esc(toolCaption())}</p>
     </div>
-    ${target ? `<p class="note">${perAction() ? "Adding tools resets this agent to asks first. Pending tasks must be restarted." : "New tools apply from the next task. Unfinished tasks must be restarted."}</p><div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${forge.caps.length ? "" : "disabled"}>Add to ${esc(target.name)}</button></div>` : `<div class="ask-box">
-      <textarea id="forge-text" data-draft="forge-text" rows="4" aria-label="Instructions for your agent" placeholder="Describe the job. For example: Create slides for executives making a decision. Lead with a recommendation, then evidence, risks and next steps. Use only the facts I give you.">${esc(forge.text)}</textarea>
-      <div class="starters" role="group" aria-label="Start from an example"><p class="note">Start from an example</p><div class="starter-grid">${roles.map(r => `<button type="button" class="starter" data-act="role" data-id="${esc(r.id)}" title="${esc(r.text)}"><b>${esc(r.name)}</b><span>${esc(r.title)}</span></button>`).join("")}</div></div>
+    <div class="ask-pane">
+    ${target ? `<p class="note">${perAction() ? "Adding tools resets this agent to asks first. Pending tasks must be restarted." : "New tools apply from the next task. Unfinished tasks must be restarted."}</p><div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${state.ok ? "" : "disabled"}>Add to ${esc(target.name)}</button></div><p class="why" id="create-why" role="status">${esc(state.why)}</p>${blockNote}` : `<div class="ask-box">
+      <textarea id="forge-text" data-draft="forge-text" rows="5" aria-label="Instructions for your agent" placeholder="Describe the job. For example: Create slides for executives making a decision. Lead with a recommendation, then evidence, risks and next steps. Use only the facts I give you.">${esc(forge.text)}</textarea>
+      ${coarse() ? "" : `<p class="note kbd" id="forge-tip">Enter adds a line. Press ⌘ or Ctrl + Enter to create.</p>`}
+      <div class="starters" role="group" aria-label="Start from an example"><p class="note">Start from an example</p><div class="starter-grid">${roles.map(r => `<button type="button" class="starter" data-act="role" data-id="${esc(r.id)}" aria-pressed="${forge.text === r.text}" title="${esc(r.text)}"><b>${esc(r.name)}</b><span>${esc(r.title)}</span></button>`).join("")}</div></div>
       <div class="ask-row">
         <span class="model-pick" title="Set once. The agent always uses this model.">${dropdown({ field: "forge-mode", value: forge.mode, label: "Model, set once for this agent", options: S["model-profiles"].map(m => [m.id, m.id === "demo" ? "Demo model" : m.name + (m.enabled ? "" : " (needs key)"), !m.enabled]) })}</span>
         <label class="name-field"><span class="sr-only">Agent name (required)</span><input data-draft="forge-name" value="${esc(forge.name)}" placeholder="Name your agent" maxlength="100" required autocomplete="off"></label>
-        <button class="btn primary" data-act="create" ${canHire() && forge.name.trim() ? "" : "disabled"} title="${forge.name.trim() ? "" : "Name your agent first"}">Create agent</button>
+        <button class="btn primary" data-act="create" ${state.ok ? "" : "disabled"}>Create agent</button>
       </div>
+      <p class="why" id="create-why" role="status">${esc(state.why)}</p>
     </div>`}
+    ${blockNote && !target ? blockNote : ""}
     ${canHire() ? "" : `<p class="note">Your role can't create agents. Switch to a manager or builder at the bottom left.</p>`}
     ${!target ? `<p class="note">The model is set once, here. ${forge.mode === "demo" ? "Demo model runs the real tools on fixed templates, no AI. Add an API key for original writing." : "This agent will always use it."}${!perAction() && !isManager() ? " A manager approves new agents before they can work." : ""}</p>` : ""}
+    </div>
   </div>`;
 }
 
@@ -351,6 +410,21 @@ function whenText(start, minutes) {
   const end = new Date(d.getTime() + (Number(minutes) || 30) * 60000);
   const t = x => x.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return `${d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} · ${t(d)} to ${t(end)}`;
+}
+/* Everything an agent saves can leave as a plain file. */
+const slug = s => String(s || "file").replace(/[^\w -]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "file";
+function exportOf(r) {
+  if (r.kind === "slideshow") return { label: "Download .md", name: slug(r.title) + ".md", mime: "text/markdown", text: `# ${r.title}\n\n` + r.slides.map((x, k) => `## ${k + 1}. ${x.title}\n\n${[x.lead, x.quote && `> ${x.quote.text}${x.quote.by ? " — " + x.quote.by : ""}`, ...(x.stats || []).map(t => `**${t.value}** ${t.label}`), ...x.bullets.map((b, j) => (x.ordered ? `${j + 1}. ` : "- ") + b)].filter(Boolean).join("\n")}${x.notes ? `\n\n_Speaker notes: ${x.notes}_` : ""}`).join("\n\n") };
+  if (r.kind === "document") return { label: "Download .md", name: slug(r.title) + ".md", mime: "text/markdown", text: `# ${r.title}\n\n${r.body}` };
+  if (r.kind === "email") return { label: "Download .eml", name: slug(r.subject) + ".eml", mime: "message/rfc822", text: `To: ${(r.to || []).join(", ")}\nSubject: ${r.subject}\nX-Unsent: 1\nContent-Type: text/plain; charset=utf-8\n\n${r.body}` };
+  if (r.kind === "tasks") return { label: "Download .md", name: slug(r.title) + ".md", mime: "text/markdown", text: `# ${r.title}\n\n` + r.tasks.map(t => `- [ ] ${t.text}${t.owner ? " (" + t.owner + ")" : ""}${t.due ? " by " + t.due : ""}`).join("\n") };
+  if (r.kind === "analysis") return { label: "Download .md", name: "analysis.md", mime: "text/markdown", text: "# Analysis\n\n" + (r.highlights || []).map(h => "- " + h).join("\n") + (r.chart ? `\n\n| ${r.chart.x} | ${r.chart.y} |\n| --- | --- |\n` + r.chart.points.map(p => `| ${p.label} | ${p.value} |`).join("\n") : "") };
+  return null;
+}
+const downloadBtn = r => { const e = exportOf(r); return e ? `<button class="link-btn" data-act="download" data-name="${esc(e.name)}" data-mime="${esc(e.mime)}" data-text="${esc(e.text)}">${icon("download", "sm")}${esc(e.label)}</button>` : ""; };
+function saveFile(name, mime, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime + ";charset=utf-8" })), a = document.createElement("a");
+  a.href = url; a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 const playbook = text => `<ul class="playbook">${String(text || "").split("\n").filter(Boolean).map(l => `<li>${esc(l)}</li>`).join("")}</ul>`;
 function preview(a) {
@@ -399,10 +473,11 @@ function slideViewer(runId, r) {
   const title = layout === "cover" && !s.bullets.length ? r.title : s.title;
   const body = (s.lead ? `<p class="lead">${esc(s.lead)}</p>` : "")
     + (s.stats?.length ? `<div class="stats">${s.stats.map(x => `<div><b>${esc(x.value)}</b><span>${esc(x.label)}</span></div>`).join("")}</div>` : "")
-    + (s.bullets.length ? `<ul>${s.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul>` : "");
-  return `<figure class="slides"><div class="stage t-${esc(r.theme || "aurora")} l-${esc(layout)}"><h3>${esc(title)}</h3>${body}<span class="num">${i + 1} / ${n}</span>
+    + (s.quote ? `<blockquote><p>${esc(s.quote.text)}</p>${s.quote.by ? `<cite>${esc(s.quote.by)}</cite>` : ""}</blockquote>` : "")
+    + (s.bullets.length ? (s.ordered ? `<ol class="steps">${s.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ol>` : `<ul>${s.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : "");
+  return `<figure class="slides"><div class="stage t-${esc(r.theme || "aurora")} l-${esc(layout)}" tabindex="0" role="group" aria-roledescription="slide" aria-label="Slide ${i + 1} of ${n}. Use the arrow keys to move." data-run="${esc(runId)}" data-n="${n}"><h3>${esc(title)}</h3>${body}<span class="num">${i + 1} / ${n}</span>
       <button class="nav prev" data-act="slide" data-run="${esc(runId)}" data-to="${i - 1}" ${i === 0 ? "disabled" : ""} aria-label="Previous slide">${icon("back")}</button><button class="nav next" data-act="slide" data-run="${esc(runId)}" data-to="${i + 1}" ${i === n - 1 ? "disabled" : ""} aria-label="Next slide">${icon("next")}</button></div>
-    <figcaption><span class="dots-nav">${r.slides.map((x, k) => `<button data-act="slide" data-run="${esc(runId)}" data-to="${k}" aria-current="${k === i}" aria-label="Slide ${k + 1}: ${esc(x.title)}"></button>`).join("")}</span><span class="note">${esc(r.title)} · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n` + r.slides.map((x, k) => `${k + 1}. ${x.title}\n${[x.lead, ...(x.stats || []).map(t => t.value + " " + t.label), ...x.bullets].filter(Boolean).map(b => "  - " + b).join("\n")}${x.notes ? "\n  Notes: " + x.notes : ""}`).join("\n\n"))}">Copy text</button></figcaption>
+    <figcaption><span class="dots-nav">${r.slides.map((x, k) => `<button data-act="slide" data-run="${esc(runId)}" data-to="${k}" aria-current="${k === i}" aria-label="Slide ${k + 1}: ${esc(x.title)}"></button>`).join("")}</span><span class="note">${esc(r.title)} · saved in your workspace</span>${downloadBtn(r)}<button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n` + r.slides.map((x, k) => `${k + 1}. ${x.title}\n${[x.lead, x.quote && `“${x.quote.text}”${x.quote.by ? " — " + x.quote.by : ""}`, ...(x.stats || []).map(t => t.value + " " + t.label), ...x.bullets.map((b, j) => x.ordered ? `${j + 1}. ${b}` : b)].filter(Boolean).map(b => "  - " + b).join("\n")}${x.notes ? "\n  Notes: " + x.notes : ""}`).join("\n\n"))}">Copy text</button></figcaption>
     ${s.notes ? `<details class="quiet"><summary>Speaker notes</summary><p class="note">${esc(s.notes)}</p></details>` : ""}</figure>`;
 }
 function chartSvg(c) {
@@ -414,11 +489,11 @@ function chartSvg(c) {
 function artifactView(runId, x) {
   const r = x.result || {};
   if (r.kind === "slideshow") return slideViewer(runId, r);
-  if (r.kind === "document") return `<article class="doc"><h3>${esc(r.title)}</h3>${md(r.body)}<footer><span>${r.word_count} words · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n${r.body}`)}">Copy text</button></footer></article>`;
+  if (r.kind === "document") return `<article class="doc"><h3>${esc(r.title)}</h3>${md(r.body)}<footer><span>${r.word_count} words · saved in your workspace</span><span class="actions">${downloadBtn(r)}<button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n${r.body}`)}">Copy text</button></span></footer></article>`;
   if (r.kind === "meeting") return `<article class="invite"><div class="date"><span>${esc(new Date(r.start).toLocaleDateString([], { month: "short" }))}</span><b>${esc(new Date(r.start).getDate())}</b></div><div class="what"><h3>${esc(r.title)}</h3><p class="when">${esc(whenText(r.start, r.duration_minutes))}${r.location ? " · " + esc(r.location) : ""}</p>${r.attendees.length ? `<p class="who-list">${r.attendees.map(a => `<span>${esc(a)}</span>`).join("")}</p>` : ""}${r.agenda.length ? `<ol class="agenda">${r.agenda.map(a => `<li>${esc(a)}</li>`).join("")}</ol>` : ""}<footer><span class="note">Saved, not sent</span><button class="link-btn" data-act="ics" data-title="${esc(r.title)}" data-ics="${esc(r.ics)}">${icon("download", "sm")}Calendar file</button><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n${whenText(r.start, r.duration_minutes)}${r.location ? "\n" + r.location : ""}${r.attendees.length ? "\nWith: " + r.attendees.join(", ") : ""}${r.agenda.length ? "\n\nAgenda:\n" + r.agenda.map(a => "- " + a).join("\n") : ""}`)}">Copy details</button></footer></div></article>`;
-  if (r.kind === "email") return `<article class="doc mail"><dl><dt>To</dt><dd>${r.to.length ? r.to.map(esc).join(", ") : "<span class='note'>Add a recipient</span>"}</dd><dt>Subject</dt><dd><b>${esc(r.subject)}</b></dd></dl>${md(r.body)}<footer><span>Draft saved · not sent</span><button class="link-btn" data-act="copy" data-text="${esc(`To: ${r.to.join(", ")}\nSubject: ${r.subject}\n\n${r.body}`)}">Copy email</button></footer></article>`;
-  if (r.kind === "tasks") return `<article class="doc tasks"><h3>${esc(r.title)}</h3><ul>${r.tasks.map(t => `<li><span class="box" aria-hidden="true"></span><span class="t">${esc(t.text)}</span>${t.owner ? `<span class="tag">${esc(t.owner)}</span>` : ""}${t.due ? `<span class="tag due">${esc(t.due)}</span>` : ""}</li>`).join("")}</ul><footer><span>${r.task_count} task${r.task_count === 1 ? "" : "s"} · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n` + r.tasks.map(t => `- [ ] ${t.text}${t.owner ? " (" + t.owner + ")" : ""}${t.due ? " by " + t.due : ""}`).join("\n"))}">Copy list</button></footer></article>`;
-  if (r.kind === "analysis") return `<div class="analysis">${r.chart ? chartSvg(r.chart) : ""}<ul class="points">${r.highlights.map(h => `<li>${esc(h)}</li>`).join("")}</ul></div>`;
+  if (r.kind === "email") return `<article class="doc mail"><dl><dt>To</dt><dd>${r.to.length ? r.to.map(esc).join(", ") : "<span class='note'>Add a recipient</span>"}</dd><dt>Subject</dt><dd><b>${esc(r.subject)}</b></dd></dl>${md(r.body)}<footer><span>Draft saved · not sent</span><span class="actions">${downloadBtn(r)}<button class="link-btn" data-act="copy" data-text="${esc(`To: ${r.to.join(", ")}\nSubject: ${r.subject}\n\n${r.body}`)}">Copy email</button></span></footer></article>`;
+  if (r.kind === "tasks") return `<article class="doc tasks"><h3>${esc(r.title)}</h3><ul>${r.tasks.map(t => `<li><span class="box" aria-hidden="true"></span><span class="t">${esc(t.text)}</span>${t.owner ? `<span class="tag">${esc(t.owner)}</span>` : ""}${t.due ? `<span class="tag due">${esc(t.due)}</span>` : ""}</li>`).join("")}</ul><footer><span>${r.task_count} task${r.task_count === 1 ? "" : "s"} · saved in your workspace</span><span class="actions">${downloadBtn(r)}<button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n` + r.tasks.map(t => `- [ ] ${t.text}${t.owner ? " (" + t.owner + ")" : ""}${t.due ? " by " + t.due : ""}`).join("\n"))}">Copy list</button></span></footer></article>`;
+  if (r.kind === "analysis") return `<div class="analysis">${r.chart ? chartSvg(r.chart) : ""}<ul class="points">${r.highlights.map(h => `<li>${esc(h)}</li>`).join("")}</ul></div><p class="note result-actions">${downloadBtn(r)}</p>`;
   if (r.kind === "page_error") return `<p class="note">Couldn't open <a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>: ${esc(r.error)}</p>`;
   if (r.kind === "page") return `<blockquote class="source"><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || r.url)}</a><p>${esc(r.text.slice(0, 420))}${r.text.length > 420 ? "…" : ""}</p></blockquote>`;
   if (r.source === "github_mcp") return `<details class="source"><summary>Read from ${esc(r.repository)}${r.truncated ? " · truncated" : ""}</summary><p class="note">${esc(r.scope)}</p><pre>${esc(r.text)}</pre></details>`;
@@ -428,10 +503,33 @@ function artifactView(runId, x) {
   return "";
 }
 /* Task answers and action summaries come from persisted backend records. */
+const RECOVERY = {
+  step_limit: "It used all of its tool calls before it could finish. Ask for something narrower, or try again.",
+  deliverable_missing: "Nothing was saved. Try again, or name the file you want (for example, “save it as a slideshow”).",
+  retry_exhausted: "The model kept failing. Wait a moment and try again.",
+  provider_error: "The model provider returned an error. Try again in a moment.",
+  provider_timeout: "The model took too long. Try again in a moment.",
+  github_error: "GitHub couldn't be read. Check the repository link and that this connection can see it.",
+  github_not_configured: "Ask an admin to prepare the GitHub connection on the server, then try again.",
+  connection_denied: "Ask an admin to prepare the GitHub connection again, then try again.",
+  repository_changed: "Start a new conversation to use a different repository.",
+  token_budget: "This task used its model budget. Try a smaller request.",
+  stale_spec: "The agent was edited while this ran. Try again.",
+  history_too_long: "This conversation is too long. Start a new conversation.",
+};
+const wordsOf = t => new Set(String(t).toLowerCase().match(/[a-z']+/g) || []);
+const similar = (a, b) => { const x = wordsOf(a), y = wordsOf(b); if (!x.size || !y.size) return false; let n = 0; x.forEach(w => { if (y.has(w)) n++; }); return n / Math.min(x.size, y.size) >= 0.7; };
+function failedCard(r) {
+  const hint = RECOVERY[r.error_code] || "Something went wrong with this task.";
+  const said = r.error || "Stopped before finishing.";
+  // The error text often already says what the hint would, so only add the hint when it adds something.
+  const extra = similar(said, hint) ? "" : hint + " ";
+  return `<div class="failed"><p class="err">${esc(said)}</p><p class="note">${esc(extra)}The agent is fine: send it anything else whenever you like.</p><div class="row"><button class="btn small" data-act="retry-run" data-id="${esc(r.id)}">Try again</button></div></div>`;
+}
 function narrate(r, arts) {
   if (r.next_attempt_at) return `<p class="note">Temporary provider issue. Retry ${esc(r.retry_count)} scheduled for ${esc(new Date(r.next_attempt_at).toLocaleTimeString())}.</p>`;
   if (r.status === "queued" || r.status === "running") return `<p class="thinking">${arts.length ? "Working on the next step" : "Thinking"}</p>`;
-  if (r.status === "failed") return `<p class="err">${esc(r.error || "Stopped before finishing.")}</p>`;
+  if (r.status === "failed") return failedCard(r);
   if (r.status === "cancelled") return `<p class="note">Stopped.</p>`;
   if (r.status === "completed" && !r.result?.answer) return `<p class="note">${esc(r.result?.summary || "Task complete.")}</p>`;
   return "";
@@ -461,31 +559,39 @@ function chatScreen(id) {
   if (!a) return `<div class="center-msg">${orb("missing", { size: 64 })}<h2>Agent not found</h2><p class="note">It may not be visible to this identity.</p><a class="btn" href="#/new">Build an agent</a></div>`;
   const runs = S.runs.filter(r => r.agent_id === id), follow = followTarget(a, runs), manages = canManage(a), caps = capsOf(a);
   const usable = profile(a.model_profile_id)?.enabled ? a.model_profile_id : "demo", ex = caps.map(c => EXAMPLES[c.id] || c.example).filter(Boolean), m = ui.metrics[id];
-  let prev = null;
-  const thread = runs.map(r => {
+  const turns = list => { let prev = null; return list.map(r => {
     const gap = prev && prev.thread_id !== r.thread_id ? `<li class="divider"><span>New conversation</span></li>` : ""; prev = r;
     return `${gap}<li class="msg you"><p>${esc(r.task)}</p></li><li class="msg agent">${orb(a.id, { size: 28, level: a.level })}<div class="body">${agentTurn(r, a)}</div></li>`;
-  }).join("");
+  }).join(""); };
+  const currentThread = activeConversation(id)?.id || runs.at(-1)?.thread_id;
+  const current = runs.filter(r => r.thread_id === currentThread), older = runs.filter(r => r.thread_id !== currentThread);
+  const olderCount = new Set(older.map(r => r.thread_id)).size;
+  const earlier = older.length ? `<details class="quiet earlier"><summary>Earlier conversations (${olderCount})</summary><ol class="thread older">${turns(older)}</ol></details>` : "";
+  const thread = turns(current);
   return `<div class="chat">
     <header class="chat-top">
       <div class="who">${orb(a.id, { size: 32, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<div><h1>${esc(a.name)}</h1><p>${caps.map(short).map(esc).join(" · ")} · ${esc(modelLabel(a.model_profile_id))}</p></div></div>
       <div class="row">
+        ${a.status === "active" && current.length ? `<button class="btn small ghost" data-act="new-thread" data-id="${esc(a.id)}" title="Start a fresh conversation with ${esc(a.name)}">${icon("plus", "sm")}New conversation</button>` : ""}
         ${perAction() ? `<button class="switch" role="switch" aria-checked="${!alone(a)}" data-act="mode" data-id="${esc(a.id)}" data-level="${alone(a) ? "intern" : "associate"}" ${manages ? "" : "disabled"}><span class="track"><span class="thumb"></span></span><span class="lbl">Ask before acting</span></button>` : ""}
 
       </div>
     </header>
     ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming stops any unfinished task.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
     ${ui.archive === id ? `<div class="about danger-zone" role="alertdialog" aria-label="Delete ${esc(a.name)}"><p><b>Delete ${esc(a.name)}?</b> It leaves your workspace and any unfinished task stops. Past work stays in the team's audit history.</p><div class="row"><button class="btn small danger" data-act="archive-confirm" data-id="${esc(id)}">Delete agent</button><button class="btn small" data-act="dismiss-agent-edit">Cancel</button></div></div>` : ""}
-    ${m ? `<section class="about"><p>${esc(a.job_description)}</p><dl><dt>Instructions</dt><dd>${esc(a.instructions)}</dd><dt>Tools</dt><dd>${caps.flatMap(c => c.tool_contracts).map(t => `${esc(TOOL_VERB[t.name] || t.name)} <span class="note">(${esc(RISK[t.risk] || t.risk)})</span>`).join("<br>")}</dd><dt>Skills</dt><dd>${caps.filter(c => c.skill).map(c => `<details class="quiet playbook-d"><summary>${esc(c.name)}</summary>${playbook(c.skill)}</details>`).join("") || "--"}</dd><dt>Track record</dt><dd>${m.p.approved_actions} of ${m.p.reviewed_actions} actions approved · ${m.p.successful_tasks} of ${m.p.evaluated_tasks} results marked good · ${m.p.completed_runs} of ${m.p.run_count} tasks finished</dd><dt>Team</dt><dd>${esc(deptName(a.department_id))} · managed by ${esc(userName(a.manager_id))}</dd></dl><button class="link-btn" data-act="close-about" data-id="${esc(id)}">Close</button></section>` : ""}
+    ${m ? `<section class="about"><dl><dt>Instructions</dt><dd>${esc(a.job_description)}<details class="quiet playbook-d"><summary>Full system prompt</summary><p class="note prompt">${esc(a.instructions)}</p></details></dd><dt>Tools</dt><dd>${caps.flatMap(c => c.tool_contracts).map(t => `${esc(TOOL_VERB[t.name] || t.name)} <span class="note">(${esc(RISK[t.risk] || t.risk)})</span>`).join("<br>")}</dd><dt>How it works</dt><dd>${caps.filter(c => c.skill).map(c => `<details class="quiet playbook-d"><summary>${esc(c.name)}</summary>${playbook(c.skill)}</details>`).join("") || "--"}</dd><dt>Track record</dt><dd>${m.p.approved_actions} of ${m.p.reviewed_actions} actions approved · ${m.p.successful_tasks} of ${m.p.evaluated_tasks} results marked good · ${m.p.completed_runs} of ${m.p.run_count} tasks finished</dd><dt>Team</dt><dd>${esc(deptName(a.department_id))} · managed by ${esc(userName(a.manager_id))}</dd></dl><button class="link-btn" data-act="close-about" data-id="${esc(id)}">Close</button></section>` : ""}
     ${a.status !== "active" ? `<div class="center-msg small"><p>${esc(a.name)} needs its own connection before the first task. Credentials never travel with a template.</p><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Connect and enable</button></div>` : ""}
-    ${runs.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${perAction() ? (alone(a) ? "It works on its own for reads and saves." : "It asks before every action.") : `It can ${esc(abilities(a).join(", "))}, and nothing else.`}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
+    ${earlier}
+    ${current.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${perAction() ? (alone(a) ? "It works on its own for reads and saves." : "It asks before every action.") : `It can ${esc(abilities(a).join(", "))}, and nothing else.`}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
     <form class="composer" data-form="run" data-id="${esc(id)}">
       ${usesGitHub(a) ? `<label class="repository-field">GitHub repository <input name="repository" data-draft="repository" data-id="${esc(id)}" value="${esc(ui.repositories[id] ?? runs.at(-1)?.repository ?? "")}" placeholder="https://github.com/owner/repository" maxlength="300" required><span class="note">Choose any repository this connection can access. Start a new conversation to switch.</span></label>` : ""}
-      ${!runs.length && ex.length ? `<div class="ideas">${ex.slice(0, 3).map(t => `<button type="button" class="idea" data-act="example" data-id="${esc(id)}" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
+      ${!current.length && ex.length ? `<div class="ideas">${ex.slice(0, 3).map(t => `<button type="button" class="idea" data-act="example" data-id="${esc(id)}" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
       <div class="box">
         <label class="sr-only" for="task-${esc(id)}">Message ${esc(a.name)}</label>
-        <textarea id="task-${esc(id)}" name="task" rows="1" data-draft="run" data-id="${esc(id)}" required placeholder="${follow ? "Reply…" : `Message ${esc(a.name)}…`}" ${a.status === "active" ? "" : "disabled"}>${esc(ui.drafts[id] ?? "")}</textarea>
-        <div class="box-row"><span class="model-chip ${profile(a.model_profile_id)?.enabled ? "" : "off"}" title="Chosen when this agent was created">${esc(modelLabel(a.model_profile_id))}${profile(a.model_profile_id)?.enabled ? "" : " · needs key"}</span>
+        <textarea id="task-${esc(id)}" name="task" rows="1" data-draft="run" data-id="${esc(id)}" ${usesGitHub(a) ? "" : "required"} placeholder="${usesGitHub(a) ? (follow ? "Reply, or just press Send to run it again…" : "Optional: add details, or just press Send to start") : follow ? "Reply…" : `Message ${esc(a.name)}…`}" ${a.status === "active" ? "" : "disabled"}>${esc(ui.drafts[id] ?? "")}</textarea>
+        <div class="box-row"><span class="row"><span class="model-chip ${profile(a.model_profile_id)?.enabled ? "" : "off"}" title="Chosen when this agent was created">${esc(modelLabel(a.model_profile_id))}${profile(a.model_profile_id)?.enabled ? "" : " · needs key"}</span>
+          ${caps.some(c => c.tools?.includes("analyze_data")) && a.status === "active" ? `<button type="button" class="icon-only attach" data-act="attach" data-id="${esc(id)}" aria-label="Add a CSV file" title="Add a CSV file (up to about 100 rows)">${icon("attach", "sm")}</button><input type="file" class="sr-only" id="file-${esc(id)}" data-attach="${esc(id)}" accept=".csv,.tsv,.txt,text/csv,text/plain" tabindex="-1" aria-hidden="true">` : ""}
+          <span class="kbd-hint note">Enter to send · Shift+Enter for a new line</span></span>
           <button class="send" aria-label="Send" ${a.status === "active" ? "" : "disabled"}>${icon("send")}</button></div>
       </div>
     </form>
@@ -498,10 +604,39 @@ function inboxScreen() {
   return `<div class="page">
     <h1 class="display">${words("Approvals")}</h1>
     <p class="lede">${perAction() ? "Agents that ask before acting wait here. Each answer covers one action." : "New agents wait here for a manager. Once approved, an agent works on its own with only the tools it was approved for."}</p>
-    ${drafts.length ? `<h2 class="section">New agents</h2><ul class="lines">${drafts.map(p => { const ok = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user); return `<li>${orb(p.id, { size: 26 })}<span><b>${esc(p.spec.name)}</b> <span class="note">Can ${esc(p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(c => c.name.toLowerCase()).join(", "))} · ${esc(modelLabel(p.spec.model_profile_id))} · asked by ${esc(userName(p.actor_id))} · ${esc(userName(p.spec.manager_id))} approves</span></span><button class="btn small ${ok ? "primary" : ""}" data-act="confirm-draft" data-id="${esc(p.id)}" data-rev="${p.revision}" ${ok ? "" : "disabled"}>Approve agent</button></li>`; }).join("")}</ul>` : ""}
+    ${drafts.length ? `<h2 class="section">New agents</h2><ul class="lines">${drafts.map(p => { const ok = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user), mine = p.actor_id === user; return `<li class="proposal">${orb(p.id, { size: 26 })}<span><b>${esc(p.spec.name)}</b> <span class="note">Can ${esc(p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(c => c.name.toLowerCase()).join(", "))} · ${esc(modelLabel(p.spec.model_profile_id))} · asked by ${esc(userName(p.actor_id))} · ${esc(userName(p.spec.manager_id))} approves</span><details class="quiet"><summary>What it will do</summary><p class="note prompt">${esc(p.spec.job_description || "No description.")}</p></details></span><span class="row">${ok || mine ? `<button class="btn small ghost" data-act="reject-draft" data-id="${esc(p.id)}">${ok && !mine ? "Decline" : "Withdraw"}</button>` : ""}<button class="btn small ${ok ? "primary" : ""}" data-act="confirm-draft" data-id="${esc(p.id)}" data-rev="${p.revision}" ${ok ? "" : "disabled"}>Approve agent</button></span></li>`; }).join("")}</ul>` : ""}
     ${pending.length ? `${drafts.length ? `<h2 class="section">Actions</h2>` : ""}<div class="list">${pending.map(a => askBlock(a, true)).join("")}</div>` : ""}
     ${!pending.length && !drafts.length ? `<p class="empty-line">Nothing waiting. You're all caught up.</p>` : ""}
     ${past.length ? `<details class="quiet history"><summary>History (${past.length})</summary><ul class="lines">${past.slice().reverse().slice(0, 25).map(a => `<li><span class="dot ${a.status === "approved" ? "ok" : a.status === "rejected" ? "bad" : "warn"}"></span><span><b>${esc(agentById(a.agent_id)?.name || "Agent")}</b> <span class="note">${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)} · ${esc(a.status.replace(/_/g, " "))}</span></span><time>${clock(a.decided_at || a.updated_at || a.created_at)}</time></li>`).join("")}</ul></details>` : ""}
+  </div>`;
+}
+
+/* Files: what the agents saved, gathered from each agent's own activity. */
+const FILE_KINDS = { slideshow: ["slides", "Slides"], document: ["document", "Document"], email: ["mail", "Email draft"], meeting: ["calendar", "Meeting"], tasks: ["tasks", "Task list"], analysis: ["chart", "Analysis"] };
+async function loadFiles() {
+  ui.files = null;
+  const agents = S.agents.slice(0, 30);
+  const snaps = await Promise.all(agents.map(a => api(`agents/${a.id}/activity`).catch(() => null)));
+  const out = [];
+  snaps.forEach((snap, i) => {
+    if (!snap) return;
+    const runs = new Map(snap.runs.map(r => [r.id, r]));
+    for (const st of snap.steps) {
+      const res = st.kind === "tool" && st.data?.result; if (!res || !FILE_KINDS[res.kind]) continue;
+      out.push({ id: st.id, agent: agents[i], run: runs.get(st.run_id), at: st.created_at, result: res });
+    }
+  });
+  ui.files = out.sort((x, y) => String(y.at).localeCompare(String(x.at)));
+  if (route().name === "files") render();
+}
+function filesScreen() {
+  const list = ui.files;
+  const row = f => { const [ic, label] = FILE_KINDS[f.result.kind], title = f.result.title || f.result.subject || label, e = exportOf(f.result);
+    return `<li><span class="lic">${icon(ic)}</span><span><b>${esc(title)}</b><span class="note">${esc(label)} · ${esc(f.agent.name)} · ${esc(new Date(f.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}</span></span><span class="row"><a class="btn small ghost" href="#/agent/${esc(f.agent.id)}">Open chat</a>${f.result.kind === "meeting" ? `<button class="btn small" data-act="ics" data-title="${esc(f.result.title)}" data-ics="${esc(f.result.ics)}">Calendar file</button>` : e ? `<button class="btn small" data-act="download" data-name="${esc(e.name)}" data-mime="${esc(e.mime)}" data-text="${esc(e.text)}">Download</button>` : ""}</span></li>`; };
+  return `<div class="page">
+    <h1 class="display">${words("Files")}</h1>
+    <p class="lede">Everything your agents saved, newest first. Nothing here was sent anywhere.</p>
+    ${list === null ? `<p class="empty-line">Loading your files…</p>` : list.length ? `<ul class="lines files">${list.map(row).join("")}</ul>` : `<p class="empty-line">Nothing saved yet. Ask an agent for a deck, a document, an email draft, a meeting or a task list.</p>`}
   </div>`;
 }
 
@@ -512,7 +647,7 @@ document.addEventListener("toggle", event => {
 }, true);
 function employeesScreen() {
   if (!S.employees) return '<div class="page"><h1>Manager access required</h1></div>';
-  return `<div class="page"><h1 class="display">Employees</h1><p class="lede">Your people, their agents, and the work they put in motion.</p><p class="note">${esc(S.employees.scope)} · Ranked by task volume. Completed tasks are not necessarily accepted results.</p><div class="employee-grid">${S.employees.employees.map((e, i) => `<details class="employee-card" data-employee="${esc(e.id)}" ${expandedEmployees.has(e.id) ? "open" : ""}><summary><span class="employee-avatar" aria-hidden="true">${esc(e.name[0])}</span><span class="employee-heading"><b>${esc(e.name)}</b><span class="note">${esc(e.roles.includes("manager") || e.roles.includes("admin") ? "Manager" : "Developer")}${e.active ? "" : " · Disabled"}</span></span><span class="employee-preview">${e.agents.length} agents <span>·</span> ${e.runs} tasks</span><span class="employee-chevron" aria-hidden="true">⌄</span></summary><div class="employee-detail"><div class="employee-metrics"><span><b>${e.agents.length}</b>Agents created</span><span><b>${e.runs}</b>Tasks run</span><span><b>${e.completed}</b>Completed</span><span><b>${e.failed}</b>Failed</span></div><p class="note">${e.input_tokens.toLocaleString()} input / ${e.output_tokens.toLocaleString()} output tokens · Provider-reported usage</p><p class="note">Last task: ${e.last_active ? esc(new Date(e.last_active).toLocaleString()) : "No activity yet"}</p><ul class="employee-agents">${e.agents.map(a => `<li><a href="#/agent/${esc(a.id)}">${esc(a.name)}</a><span class="note">${esc(a.status)} · ${a.performance?.result_eligible ? pct(a.performance.task_success_rate) + " rated good" : "Not enough ratings"}</span></li>`).join("") || '<li class="note">No agents created yet</li>'}</ul></div></details>`).join("")}</div></div>`;
+  return `<div class="page"><h1 class="display">Employees</h1><p class="lede">Your people, their agents, and the work they put in motion.</p><p class="note">${esc(S.employees.scope)} · Ranked by task volume. Completed tasks are not necessarily accepted results.</p>${(() => { const quiet = S.employees.employees.filter(e => !e.agents.length && !e.runs).length; return quiet ? `<button class="link-btn" data-act="people">${ui.allPeople ? "Hide people with no activity" : `Show ${quiet} more with no activity yet`}</button>` : ""; })()}<div class="employee-grid">${S.employees.employees.filter(e => ui.allPeople || e.agents.length || e.runs).map((e, i) => `<details class="employee-card" data-employee="${esc(e.id)}" ${expandedEmployees.has(e.id) ? "open" : ""}><summary><span class="employee-avatar" aria-hidden="true">${esc(e.name[0])}</span><span class="employee-heading"><b>${esc(e.name)}</b><span class="note">${esc(e.roles.includes("admin") ? "Admin" : e.roles.includes("manager") ? "Manager" : e.roles.includes("builder") ? "Builder" : "Member")}${e.active ? "" : " · Disabled"}</span></span><span class="employee-preview">${e.agents.length} agents <span>·</span> ${e.runs} tasks</span><span class="employee-chevron" aria-hidden="true">${icon("chev")}</span></summary><div class="employee-detail"><div class="employee-metrics"><span><b>${e.agents.length}</b>Agents created</span><span><b>${e.runs}</b>Tasks run</span><span><b>${e.completed}</b>Completed</span><span><b>${e.failed}</b>Failed</span></div><p class="note">${e.input_tokens.toLocaleString()} input / ${e.output_tokens.toLocaleString()} output tokens · Provider-reported usage</p><p class="note">Last task: ${e.last_active ? esc(new Date(e.last_active).toLocaleString()) : "No activity yet"}</p><ul class="employee-agents">${e.agents.map(a => `<li><a href="#/agent/${esc(a.id)}">${esc(a.name)}</a><span class="note">${esc(a.status)} · ${a.performance?.result_eligible ? pct(a.performance.task_success_rate) + " rated good" : "Not enough ratings"}</span></li>`).join("") || '<li class="note">No agents created yet</li>'}</ul></div></details>`).join("")}</div></div>`;
 }
 
 /* ---------- leaderboard ---------- */
@@ -544,14 +679,21 @@ function libraryScreen() {
   const listings = S.marketplace.filter(l => l.kind === "agent");
   const github = S["integrations/github"] || {};
   const source = ui.newTool.source || (github.connected ? "github" : "bundle");
+  // GitHub setup only shows up once someone picks GitHub below. After it's prepared, its tool appears in the list by itself.
+  const isAdmin = S.me.roles.includes("admin");
+  const setup = github.connected ? "" : !github.configured
+    ? `<p class="note gh-note">GitHub reading needs a token on the server. Add <b>GITHUB_PERSONAL_ACCESS_TOKEN</b> to the server's <b>.env</b>, restart, then come back here.</p>`
+    : isAdmin
+      ? `<div class="gh-card"><span class="gh-text">${icon("tool")}<span>GitHub isn't ready yet. Enter a repository the server's GitHub token can read to test it. This turns GitHub on for your departments.</span></span><label class="gh-field">Repository to test <input id="gh-repo" form="gh-none" maxlength="300" placeholder="owner/repository" autocomplete="off"></label><button type="button" class="btn small primary" data-act="gh-prepare">Prepare GitHub</button></div>`
+      : `<p class="note gh-note">GitHub isn't ready yet. Ask an admin to prepare it, then come back here.</p>`;
   const add = `<details class="quiet add-library-tool"><summary>Add a tool</summary><form class="stack" data-form="new-cap">
     ${isManager() ? "" : `<p class="note">You can explore this form. Sign in with a manager or admin account to add tools to the Library.</p>`}
     <label>Name <input name="name" data-draft="new-tool-name" value="${esc(ui.newTool.name)}" required maxlength="100" placeholder="Repository Reader"></label>
     <label>What should it do? <textarea name="description" data-draft="new-tool-description" required maxlength="1000" rows="2" placeholder="Read a repository and explain its purpose, code and open issues.">${esc(ui.newTool.description)}</textarea></label>
-    <label>Use <select name="source" data-draft="new-tool-source">${opts([["github", github.connected ? "GitHub · connected" : "GitHub · connector not prepared", !github.connected], ["bundle", "Existing workspace tools"]], source)}</select></label>
-    ${source === "github" ? `<label>Department <select name="department_id" data-draft="new-tool-department">${opts(S.departments.filter(d => github.department_ids?.includes(d.id)).map(d => [d.id,d.name]), ui.newTool.department || defaultDept())}</select></label><p class="note">Reads files and issues. Choose the repository when assigning a task.</p>` : `<div class="checks">${Object.entries(TOOL_VERB).filter(([k]) => !k.startsWith("github_")).map(([k,v]) => `<label><input type="checkbox" name="tools" value="${esc(k)}">${esc(v[0].toUpperCase()+v.slice(1))}</label>`).join("")}</div>`}
-    <div><button class="btn small primary" ${isManager() ? "" : "disabled"}>Add tool</button></div></form></details>`;
-  const tools = `<ul class="lines tools">${S.capabilities.map(c => `<li><span class="lic">${icon(c.icon || "tool")}</span><span><b>${esc(c.name)}</b><span class="note">${esc(c.description)} · ${esc(c.tool_contracts.map(t => RISK[t.risk] || t.risk).join(", "))} · by ${esc(userName(c.creator_id))} · ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"}</span>${c.skill ? `<details class="quiet playbook-d"><summary>Playbook</summary>${playbook(c.skill)}</details>` : ""}</span><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>Use</button></li>`).join("")}</ul>`;
+    <div class="field"><span class="label">Use</span><input type="hidden" name="source" value="${esc(source)}">${dropdown({ field: "new-tool-source", value: source, label: "Where the tool gets its abilities", options: [["github", github.connected ? "GitHub · connected" : "GitHub · needs setup"], ["bundle", "Existing workspace tools"]] })}</div>
+    ${source === "github" && !github.connected ? setup : source === "github" ? `<div class="field"><span class="label">Department</span><input type="hidden" name="department_id" value="${esc(ui.newTool.department || defaultDept())}">${dropdown({ field: "new-tool-department", value: ui.newTool.department || defaultDept(), label: "Department", options: S.departments.filter(d => github.department_ids?.includes(d.id)).map(d => [d.id, d.name]) })}</div><p class="note">Reads files and issues. Choose the repository when assigning a task.</p>` : `<div class="checks">${Object.entries(TOOL_VERB).filter(([k]) => !k.startsWith("github_")).map(([k,v]) => `<label><input type="checkbox" name="tools" value="${esc(k)}">${esc(v[0].toUpperCase()+v.slice(1))}</label>`).join("")}</div>`}
+    <div><button class="btn small primary" ${isManager() && !(source === "github" && !github.connected) ? "" : "disabled"}>Add tool</button></div></form></details>`;
+  const tools = `<ul class="lines tools">${S.capabilities.map(c => `<li><span class="lic">${icon(c.icon || "tool")}</span><span><b>${esc(c.name)}</b><span class="note" title="Added by ${esc(userName(c.creator_id))}">${esc(c.description)}</span><span class="note meta">${esc([...new Set(c.tool_contracts.map(t => RISK[t.risk] || t.risk))].join(", "))}${usage(c.id) ? ` · used by ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"}` : ""}</span>${c.skill ? `<details class="quiet playbook-d"><summary>Playbook</summary>${playbook(c.skill)}</details>` : ""}</span><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>Use</button></li>`).join("")}</ul>`;
   const shared = listings.length ? `<ul class="lines">${listings.map(l => `<li>${orb(l.id, { size: 26 })}<span><b>${esc(l.payload.name)}</b><span class="note">${esc(l.payload.job_description)} · by ${esc(userName(l.creator_id || l.publisher_id))} · ${l.installation_count} install${l.installation_count === 1 ? "" : "s"}</span></span><form data-form="install" data-id="${esc(l.id)}"><button class="btn small" ${canHire() ? "" : "disabled"}>Install</button></form></li>`).join("")}</ul>` : `<p class="empty-line">Nothing shared yet. Open an agent's menu and choose “Share as template”.</p>`;
   return `<div class="page">
     <h1 class="display">${words("Library")}</h1>
@@ -560,45 +702,12 @@ function libraryScreen() {
     ${ui.lib === "capabilities" ? tools + add : shared}</div>`;
 }
 
-/* ---------- team jobs ---------- */
-const JOBS = {
-  launch: { name: "Product launch", caps: ["analyze-data", "write-document", "make-slideshow"], tools: ["analyze_data", "create_document", "create_slideshow"], deliverables: "Analysis, decision brief and pitch deck" },
-  analysis: { name: "Growth analysis", caps: ["analyze-data"], tools: ["analyze_data"], deliverables: "Analysis and chart" },
-  brief: { name: "Decision brief", caps: ["write-document"], tools: ["create_document"], deliverables: "Decision document" },
-  support: { name: "Support response", caps: ["ticket-search", "help-docs", "reply-drafts"], tools: ["search_tickets", "search_docs", "create_draft"], deliverables: "Policy-backed reply draft" }
-};
-function workflowAgents(w) {
-  return S.agents.filter(a => a.status === "active" && a.department_id === w.department_id && canManage(a) && w.required_tools.every(t => capsOf(a).some(c => (c.tools || []).includes(t))));
-}
-function jobsScreen() {
-  const items = S["work-queue"] || [];
-  return `<div class="page">
-    <h1 class="display">${words("Team jobs")}</h1>
-    <p class="lede">Hand a whole brief to an agent and review what it delivers. Sample jobs use fictional data.</p>
-    <div class="ideas left">${["launch", "analysis", "brief"].map(k => `<button class="idea" data-act="load-job" data-workflow="${k}">${icon("plus", "sm")}${esc(JOBS[k].name)}</button>`).join("")}</div>
-    <details class="quiet"><summary>Write your own job</summary><form class="stack" data-form="create-job"><select name="workflow" aria-label="Job type">${opts(["launch", "analysis", "brief"].map(k => [k, JOBS[k].name]), "launch")}</select><select name="department_id" aria-label="Team">${opts(S.departments.map(d => [d.id, d.name]), defaultDept())}</select><input name="title" required maxlength="100" placeholder="Title" aria-label="Title"><textarea name="task" required maxlength="4000" placeholder="Task and source data" aria-label="Task and source data"></textarea><div><button class="btn primary small">Add job</button></div></form></details>
-    ${items.map(jobItem).join("")}
-  </div>`;
-}
-function jobItem(w) {
-  const a = agentById(w.agent_id), canReview = a && canManage(a), id = esc(w.id), job = JOBS[w.workflow] || JOBS.support, eligible = workflowAgents(w);
-  const state = { unassigned: "Unassigned", accepted: "Accepted", needs_correction: "Needs correction", awaiting_approval: "Waiting for approval", completed: "Delivered", running: "Working", queued: "Starting", failed: "Stopped" }[w.status] || w.status;
-  return `<section class="job"><div class="job-head"><div><span class="note">${esc(job.name)} · ${w.sample_data ? "fictional input" : "your input"}</span><h2>${esc(w.title)}</h2></div><span class="state ${esc(w.status)}">${esc(state)}</span></div>
-    <p class="note">${esc(job.deliverables)}${a ? " · " + esc(a.name) : ""}</p>
-    ${w.ticket ? `<p>${esc(w.ticket.body)}</p>` : `<details class="quiet"><summary>Brief and rules</summary><pre>${esc(w.task)}</pre></details>`}
-    ${!w.run_id || ["needs_correction", "failed", "cancelled"].includes(w.status) ? `<form class="row wrap" data-form="assign-ticket" data-id="${id}"><select name="agent_id" required aria-label="Agent">${opts(eligible.map(x => [x.id, x.name]), w.agent_id || "")}</select><button class="btn primary small" ${eligible.length ? "" : "disabled"}>${w.run_id ? "Rerun" : "Assign"}</button>${eligible.length ? "" : `<button type="button" class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}">Build an agent for this</button>`}</form>` : `<a class="link-btn" href="#/agent/${esc(w.agent_id)}">Open the conversation</a>`}
-    ${w.artifacts?.length && w.finished_at ? `<details class="quiet"><summary>Deliverables (${w.artifacts.length})</summary>${w.artifacts.map((x, i) => artifactView(w.run_id + "-" + i, x)).join("")}</details>` : ""}
-    ${w.quality ? `<details class="quiet"><summary>Deliverable checks · ${w.quality.passed ? "passed" : "needs repair"}</summary><ul>${w.quality.checks.map(c=>`<li>${c.passed ? "✓" : "×"} ${esc(c.detail)}</li>`).join("")}</ul><p class="note">${esc(w.quality.limits)}</p></details>` : ""}
-    ${w.error ? `<p class="err">${esc(w.error)}</p>` : ""}
-    ${w.finished_at && !w.outcome && ["completed", "failed"].includes(w.status) && canReview ? `<form class="stack" data-form="review-ticket" data-id="${id}"><textarea name="comment" required placeholder="Does it meet the brief? What needs fixing?" aria-label="Review notes"></textarea><div class="row"><button class="btn primary small" name="success" value="true" ${w.deliverables_ready && w.status === "completed" ? "" : "disabled"}>Accept</button><button class="btn small" name="success" value="false">Needs correction</button></div></form>` : ""}
-    ${w.outcome ? `<p class="note">Review: ${esc(w.outcome.comment)}</p>` : ""}</section>`;
-}
-
 /* ---------- atomic create flow ---------- */
 async function createAgent() {
   const target = forge.target && agentById(forge.target);
   if (!forge.caps.length && !forge.text.trim()) throw Error("Add instructions or choose a tool.");
   if (!target && !forge.name.trim()) throw Error("Name your agent.");
+  if (!target && nameTaken(forge.name)) throw Error(`An agent called ${forge.name.trim()} already exists. Pick another name.`);
   if (target) {
     const a = await api(`agents/${target.id}/capabilities`, "POST", { capability_ids: forge.caps, expected_spec_version: target.spec_version });
     forge = forge0(); location.hash = "#/agent/" + a.id;
@@ -623,8 +732,9 @@ async function createAgent() {
 function toggleTool(id) {
   const adding = !forge.caps.includes(id);
   forge.caps = adding ? [...forge.caps, id] : forge.caps.filter(c => c !== id);
+  ui.caption = adding ? id : null;
   if (adding) ui.pulse++;
-  render(); $(`.belt [data-id="${id}"]`)?.focus({ preventScroll: true });
+  render(); ($(`.orbit [data-id="${id}"]`) || $(`.belt [data-id="${id}"]`))?.focus({ preventScroll: true });
 }
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b) return;
@@ -634,17 +744,20 @@ document.addEventListener("click", e => {
   if (kind === "role") {
     const r = ROLES.find(x => x.id === b.dataset.id); if (!r) return;
     forge.text = r.text; forge.caps = [...new Set([...forge.caps, ...r.caps.filter(capById)])];
-    if (!forge.name.trim() || ROLES.some(x => x.name === forge.name)) forge.name = r.name;
+    if (!forge.name.trim() || forge.autoName) { forge.name = uniqueName(r.name); forge.autoName = true; }
     ui.pulse++; render(); const t = $("#forge-text"); if (t) { grow(t); t.focus(); }
   }
   if (kind === "pick") {
     const v = b.dataset.value;
+    if (b.dataset.field === "new-tool-source") { ui.newTool.source = v; render(); $(".add-library-tool")?.setAttribute("open", ""); }
+    if (b.dataset.field === "new-tool-department") { ui.newTool.department = v; render(); $(".add-library-tool")?.setAttribute("open", ""); }
     if (b.dataset.field === "forge-mode") { forge.mode = v; render(); }
     if (b.dataset.field === "identity") { const sel = $("#identity"); if (sel && sel.value !== v) { sel.value = v; sel.dispatchEvent(new Event("change", { bubbles: true })); } b.closest("details")?.removeAttribute("open"); }
   }
   if (kind === "idea") { forge.text = b.dataset.text; render(); const t = $("#forge-text"); if (t) { grow(t); t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
   if (kind === "create") act(createAgent, b);
   if (kind === "confirm-draft") act(async () => { const a = await api(`recruiter/proposals/${id}/confirm`, "POST", { revision: Number(b.dataset.rev) }); ui.fresh = a.id; location.hash = "#/agent/" + a.id; return null; }, b);
+  if (kind === "reject-draft") act(async () => { await api(`recruiter/proposals/${id}/reject`, "POST", {}); return "Request closed. Nothing was created."; }, b);
   if (kind === "use-cap") { forge = { ...forge0(), caps: [id] }; location.hash = "#/new"; render(); }
   if (kind === "teach") { b.closest("details")?.removeAttribute("open"); forge = { ...forge0(), target: id }; location.hash = "#/new"; render(); }
   if (kind === "mode") { const a = agentById(id); if (a) act(async () => { await api(`agents/${id}/level`, "POST", { level: b.dataset.level, reason: "Switched from the agent page." }); return b.dataset.level === "intern" ? `${a.name} will ask before every action.` : `${a.name} now works on its own for reads and saves.`; }, b); }
@@ -664,10 +777,21 @@ document.addEventListener("click", e => {
   if (kind === "dismiss-agent-edit") { ui.rename = null; ui.archive = null; render(); }
   if (kind === "archive-confirm") act(async () => { await api(`agents/${id}`, "DELETE"); ui.archive = null; location.hash = "#/new"; return "Agent deleted."; }, b);
   if (kind === "revise") { ui.revise[id] = !ui.revise[id]; ui.stick = false; render(); ui.stick = true; $(`form[data-id="${id}"] input`)?.focus(); }
-  if (kind === "slide") { ui.slide[b.dataset.run] = Math.max(0, Number(b.dataset.to)); ui.stick = false; render(); ui.stick = true; }
+  if (kind === "slide") goSlide(b.dataset.run, Number(b.dataset.to));
+  if (kind === "download") saveFile(b.dataset.name, b.dataset.mime, b.dataset.text);
+  if (kind === "attach") $(`#file-${id}`)?.click();
   if (kind === "ics") { const url = URL.createObjectURL(new Blob([b.dataset.ics], { type: "text/calendar" })), a = document.createElement("a"); a.href = url; a.download = (b.dataset.title || "meeting").replace(/[^\w -]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() + ".ics"; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
   if (kind === "copy") navigator.clipboard?.writeText(b.dataset.text).then(() => toast("Copied."), () => toast("Couldn't copy. Select the text instead.", true));
   if (kind === "rate") act(async () => { await api(`runs/${id}/outcome`, "POST", { success: b.dataset.ok === "true", comment: b.dataset.ok === "true" ? "Manager rated the result good." : "Manager rated the result poor." }); return "Thanks. That counts toward the leaderboard."; }, b);
+  if (kind === "retry-run") {
+    const r = S.runs.find(x => x.id === id), a = r && agentById(r.agent_id); if (!a) return;
+    act(async () => {
+      const body = { task: r.task };
+      if (r.repository) body.repository = r.repository;
+      const conv = activeConversation(a.id); if (conv) body.conversation_id = conv.id;
+      await api(`agents/${a.id}/runs`, "POST", body); return null;
+    }, b);
+  }
   if (kind === "cancel") act(async () => { await api(`runs/${id}/cancel`, "POST", {}); return null; }, b);
   if (kind === "activate") act(async () => {
     const a = agentById(id), ids = a.required_capabilities?.map(c => c.id) || a.bindings.map(x => x.capability_id), bindings = [];
@@ -678,23 +802,69 @@ document.addEventListener("click", e => {
   if (kind === "perf") { b.closest("details")?.removeAttribute("open"); (async () => { try { const [p, v] = await Promise.all([api(`agents/${id}/performance`), api(`agents/${id}/versions`)]); ui.metrics[id] = { p, v }; ui.stick = false; render(); ui.stick = true; scrollTo({ top: 0, behavior: "smooth" }); } catch (err) { toast(err.message, true); } })(); }
   if (kind === "close-about") { delete ui.metrics[id]; render(); }
   if (kind === "share-agent") { b.closest("details")?.removeAttribute("open"); act(async () => { await api("marketplace", "POST", { kind: "agent", source_id: id }); return "Shared in the Library. No connections or trust included."; }, b); }
+  if (kind === "people") { ui.allPeople = !ui.allPeople; render(); }
   if (kind === "rank") { ui.rank = b.dataset.tab; render(); }
   if (kind === "board") { ui.board = b.dataset.tab; render(); }
   if (kind === "lib") { ui.lib = b.dataset.tab; render(); }
-  if (kind === "load-job") act(async () => { await api("work-queue/sample-batch", "POST", { workflow: b.dataset.workflow }); return "Sample job added."; }, b);
-  if (kind === "hire-workflow") { const job = JOBS[b.dataset.workflow]; forge = { ...forge0(), caps: job.caps, text: `Own ${job.name.toLowerCase()} jobs: ${job.deliverables.toLowerCase()}. Follow the job's rules and ask before acting.` }; location.hash = "#/new"; render(); }
+  if (kind === "gh-prepare") {
+    const repo = ($("#gh-repo")?.value || "").trim();
+    if (!repo) { toast("Enter a repository to test, like owner/repository.", true); $("#gh-repo")?.focus(); return; }
+    act(async () => {
+      for (const dep of S.departments) await api("integrations/github/connect", "POST", { repository: repo, department_id: dep.id });
+      return "GitHub is ready. Read GitHub repositories is now in your tools.";
+    }, b).then(() => $(".add-library-tool")?.setAttribute("open", ""));
+  }
 });
 
+function goSlide(runId, to, focus = false) {
+  ui.slide[runId] = Math.max(0, to); ui.stick = false; render(); ui.stick = true;
+  if (focus) $(`.stage[data-run="${runId}"]`)?.focus({ preventScroll: true });
+}
+/* Slides: arrow keys and swipe work as well as the buttons. */
+document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "gh-repo") { e.preventDefault(); $('[data-act="gh-prepare"]')?.click(); }
+  
+  const st = e.target.closest?.(".stage[data-run]"); if (!st || !["ArrowLeft", "ArrowRight"].includes(e.key)) return;
+  const n = Number(st.dataset.n), cur = Math.min(ui.slide[st.dataset.run] || 0, n - 1), to = cur + (e.key === "ArrowRight" ? 1 : -1);
+  if (to < 0 || to > n - 1) return; e.preventDefault(); goSlide(st.dataset.run, to, true);
+});
+let swipe = null;
+document.addEventListener("pointerdown", e => { const st = e.target.closest?.(".stage[data-run]"); swipe = st && !e.target.closest("button") && e.pointerType === "touch" ? { run: st.dataset.run, n: Number(st.dataset.n), x: e.clientX, y: e.clientY } : null; });
+document.addEventListener("pointerup", e => {
+  if (!swipe) return; const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y, s = swipe; swipe = null;
+  if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+  const cur = Math.min(ui.slide[s.run] || 0, s.n - 1), to = cur + (dx < 0 ? 1 : -1);
+  if (to >= 0 && to < s.n) goSlide(s.run, to);
+});
 /* Drag and drop: tools onto the core. Clicking a tool (or Enter/Space) does the same thing. */
-document.addEventListener("dragstart", e => { const t = e.target.closest?.(".tool[data-id]"); if (!t) return; e.dataTransfer.setData("text/plain", t.dataset.id); e.dataTransfer.effectAllowed = "copy"; t.classList.add("lifted"); document.body.classList.add("dragging"); });
-document.addEventListener("dragend", e => { e.target.closest?.(".tool")?.classList.remove("lifted"); document.body.classList.remove("dragging"); $(".core-zone")?.classList.remove("over"); });
-document.addEventListener("dragover", e => { const z = e.target.closest?.("[data-drop]"); if (!z) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; z.classList.add("over"); });
+const dropTarget = e => { const z = e.target.closest?.("[data-drop]"); return z && (z.dataset.drop === "core" ? ui.dragFrom === "belt" : ui.dragFrom === "orbit") ? z : null; };
+document.addEventListener("dragstart", e => {
+  const t = e.target.closest?.(".tool[data-id]"); if (!t) return;
+  e.dataTransfer.setData("text/plain", t.dataset.id); e.dataTransfer.effectAllowed = "copyMove"; t.classList.add("lifted");
+  ui.dragFrom = t.dataset.from === "orbit" ? "orbit" : "belt";
+  document.body.classList.add(ui.dragFrom === "orbit" ? "dragging-out" : "dragging");
+  const cap = $("#tool-caption"); if (cap) cap.textContent = ui.dragFrom === "orbit" ? "Drop it back down here to remove it." : "Drop it on the core.";
+});
+document.addEventListener("dragend", e => { e.target.closest?.(".tool")?.classList.remove("lifted"); document.body.classList.remove("dragging", "dragging-out"); ui.dragFrom = null; $$("[data-drop]").forEach(z => z.classList.remove("over")); const cap = $("#tool-caption"); if (cap) cap.textContent = toolCaption(); });
+document.addEventListener("dragover", e => { const z = dropTarget(e); if (!z) return; e.preventDefault(); e.dataTransfer.dropEffect = z.dataset.drop === "core" ? "copy" : "move"; z.classList.add("over"); });
 document.addEventListener("dragleave", e => { const z = e.target.closest?.("[data-drop]"); if (z && !z.contains(e.relatedTarget)) z.classList.remove("over"); });
 document.addEventListener("drop", e => {
-  const z = e.target.closest?.("[data-drop]"); if (!z) return; e.preventDefault();
-  const id = e.dataTransfer.getData("text/plain"); document.body.classList.remove("dragging");
-  if (id && capById(id) && !forge.caps.includes(id)) toggleTool(id); else z.classList.remove("over");
+  const z = dropTarget(e); if (!z) return; e.preventDefault();
+  const id = e.dataTransfer.getData("text/plain"); document.body.classList.remove("dragging", "dragging-out"); ui.dragFrom = null;
+  const onCore = forge.caps.includes(id);
+  if (id && capById(id) && (z.dataset.drop === "core" ? !onCore : onCore)) toggleTool(id); else z.classList.remove("over");
 });
+/* Tool captions: hover or focus a tool to read what it does (touch shows it after a tap). */
+const showCaption = e => { const t = e.target.closest?.(".belt .tool[data-id]"); const cap = $("#tool-caption"), c = t && capById(t.dataset.id); if (cap && c && !ui.dragFrom) cap.textContent = `${short(c)}: ${c.description}`; };
+document.addEventListener("pointerover", e => { if (e.pointerType !== "touch") showCaption(e); });
+document.addEventListener("focusin", showCaption);
+document.addEventListener("pointerout", e => { if (e.target.closest?.(".belt .tool[data-id]") && !ui.dragFrom) { const cap = $("#tool-caption"); if (cap) cap.textContent = toolCaption(); } });
+/* Menus that would run off the bottom of the screen open upward instead. */
+document.addEventListener("toggle", e => {
+  const d = e.target; if (!d.matches?.("details.dd") || !d.open) return;
+  const pop = d.querySelector(".dd-pop"); d.classList.remove("flip"); if (!pop) return;
+  const r = d.getBoundingClientRect();
+  if (r.bottom + pop.offsetHeight + 12 > innerHeight && r.top > pop.offsetHeight + 12) d.classList.add("flip");
+}, true);
 
 document.addEventListener("submit", e => {
   const f = e.target, kind = f.dataset.form; if (!kind) return; e.preventDefault();
@@ -702,10 +872,12 @@ document.addEventListener("submit", e => {
   if (sub?.name) d[sub.name] = sub.value;
   if (kind === "run") {
     const a = agentById(f.dataset.id), follow = followTarget(a, S.runs.filter(r => r.agent_id === a.id));
-    if (!d.task.trim()) return;
+    // A GitHub agent already has its job in its instructions, so an empty message just starts it.
+    const task = d.task.trim() || (usesGitHub(a) ? "Do your assigned job on this repository." : "");
+    if (!task) return;
     act(async () => {
-      // The agent's model was fixed when it was created; the server uses it for every task.
-      const body = { task: d.task, max_steps: 8 };
+      // The agent's model was fixed when it was created; the server owns the tool-call budget.
+      const body = { task };
       if (usesGitHub(a)) body.repository = d.repository;
       const conv = activeConversation(a.id);
       if (conv) body.conversation_id = conv.id;
@@ -713,7 +885,7 @@ document.addEventListener("submit", e => {
       await api(`agents/${a.id}/runs`, "POST", body);
       ui.drafts[a.id] = "";
       return null;
-    }, sub);
+    }, sub || f.querySelector(".send")).then(() => requestAnimationFrame(() => { const t = $("[data-draft='run']"); if (t && !t.disabled && document.activeElement === document.body) t.focus({ preventScroll: true }); }));
   }
   if (kind === "rename") act(async () => { const a = agentById(f.dataset.id); await api(`agents/${a.id}`, "PATCH", { name: d.name, expected_spec_version: a.spec_version }); ui.rename = null; return "Name saved."; }, sub);
   if (kind === "decide") act(async () => { await api(`approvals/${f.dataset.id}/decision`, "POST", d); delete ui.revise[f.dataset.id]; return { approve: null, reject: "Okay. That action won't run.", request_revision: "Sent back. It will propose something new." }[d.decision]; }, sub);
@@ -726,31 +898,37 @@ document.addEventListener("submit", e => {
     ui.newTool = {source: null, name: "", description: "", department: null};
     return "Tool added to Library. Use it alongside Slides or Documents.";
   }, sub);
-  if (kind === "create-job") act(async () => { await api("work-queue", "POST", d); return "Job added. Assign an agent to begin."; }, sub);
-  if (kind === "assign-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/assign`, "POST", d); return perAction() ? "Assigned. It will ask before acting." : "Assigned. It's working on it."; }, sub);
-  if (kind === "review-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/review`, "POST", { success: d.success === "true", comment: d.comment }); return "Review saved."; }, sub);
 });
 
 /* Text boxes grow with what you type. */
 function grow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 220) + "px"; }
 document.addEventListener("input", e => {
   const t = e.target.dataset?.draft; if (!t) return;
-  if (t === "forge-text") { forge.text = e.target.value; grow(e.target); }
-  if (t === "forge-name") { forge.name = e.target.value; const go = $("[data-act='create']"); if (go && !forge.target) { go.disabled = !(canHire() && forge.name.trim()); go.title = forge.name.trim() ? "" : "Name your agent first"; } }
+  if (t === "forge-text") { forge.text = e.target.value; grow(e.target); syncCreate(); }
+  if (t === "forge-name") { forge.name = e.target.value; forge.autoName = false; syncCreate(); }
   if (t === "run") { ui.drafts[e.target.dataset.id] = e.target.value; grow(e.target); }
   if (t === "repository") ui.repositories[e.target.dataset.id] = e.target.value;
   if (t === "new-tool-name") ui.newTool.name = e.target.value;
   if (t === "new-tool-description") ui.newTool.description = e.target.value;
 });
-document.addEventListener("change", e => {
+const TASK_LIMIT = 4000;
+document.addEventListener("change", async e => {
+  const agentId = e.target.dataset?.attach;
+  if (agentId) {
+    const file = e.target.files?.[0]; e.target.value = ""; if (!file) return;
+    const text = (await file.text()).replace(/\r\n?/g, "\n").trim(), head = ui.drafts[agentId]?.trim() ? ui.drafts[agentId].trim() + "\n\n" : "Analyze this data:\n";
+    if ((head + text).length > TASK_LIMIT) { toast(`${file.name} is too long for one message (about ${TASK_LIMIT.toLocaleString()} characters, roughly 100 rows). Keep only the columns you need.`, true); return; }
+    ui.drafts[agentId] = head + text; render();
+    const t = $("[data-draft='run']"); if (t) { grow(t); t.focus(); }
+    toast(`Added ${file.name} (${Math.max(0, text.split("\n").length - 1)} rows).`); return;
+  }
   const kind = e.target.dataset?.draft;
   if (kind === "forge-mode") { forge.mode = e.target.value; render(); }
-  if (kind === "new-tool-source") { ui.newTool.source = e.target.value; render(); $(".add-library-tool")?.setAttribute("open", ""); }
-  if (kind === "new-tool-department") ui.newTool.department = e.target.value;
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches?.("textarea[data-draft='run']")) { e.preventDefault(); e.target.form.requestSubmit(); }
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches?.("#forge-text")) { e.preventDefault(); if (forge.name.trim()) $("[data-act='create']")?.click(); else $("[data-draft='forge-name']")?.focus(); }
+  if (e.key === "Enter" && !e.isComposing && (e.metaKey || e.ctrlKey) && e.target.matches?.("#forge-text")) { e.preventDefault(); if (createState().ok) $("[data-act='create']")?.click(); else if (!forge.name.trim()) $("[data-draft='forge-name']")?.focus(); else syncCreate(); }
+  if (e.key === "Enter" && !e.isComposing && e.target.matches?.("[data-draft='forge-name']")) { e.preventDefault(); if (createState().ok) $("[data-act='create']")?.click(); }
   if (e.key === "Escape") { $$("details.menu[open]").forEach(d => d.removeAttribute("open")); document.body.classList.remove("side-open"); }
 });
 document.addEventListener("click", e => { $$("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.removeAttribute("open"); }); });
@@ -788,22 +966,25 @@ $("#identity").addEventListener("change", e => { if (authMode === "password") re
 })();
 $("#menu-btn").addEventListener("click", () => document.body.classList.toggle("side-open"));
 $("#scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
-addEventListener("hashchange", async () => { document.body.classList.remove("side-open"); if (route().name === "agent") await loadSteps().catch(() => {}); syncActivityStream(); render(); enter(); if (route().name !== "agent") scrollTo({ top: 0 }); });
+addEventListener("hashchange", async () => { document.body.classList.remove("side-open"); if (route().name === "files") loadFiles(); if (route().name === "agent") await loadSteps().catch(() => {}); syncActivityStream(); render(); enter(); if (route().name !== "agent") scrollTo({ top: 0 }); });
 
 /* ---------- sky: a planet's horizon catching first light. One canvas; it breathes slowly. ---------- */
 function startSky() {
   const cv = $("#sky"), ctx = cv?.getContext("2d"); if (!ctx) return;
   const still = matchMedia("(prefers-reduced-motion: reduce)");
   const stars = Array.from({ length: 150 }, () => [Math.random(), Math.random() * 0.8, Math.random() * 1.1 + 0.3, Math.random() * 6.28]);
-  let W = 0, H = 0, raf = 0, px = 0, py = 0, tx = 0, ty = 0, f = 0.6;
+  let W = 0, H = 0, raf = 0, px = 0, py = 0, tx = 0, ty = 0, f = 0.6, fade = 1;
   const size = () => { const d = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight; cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0); };
   /* Where the horizon sits: behind the core on the creator, low behind the message box in a chat. */
-  const goal = () => ({ new: W < 620 ? 0.5 : 0.53, agent: 0.97 }[document.body.dataset.view] ?? 0.86);
+  const goal = () => ({ new: W < 620 ? 0.5 : W > 1100 ? 0.45 : 0.53, agent: 0.97 }[document.body.dataset.view] ?? 0.86);
+  /* Where text scrolls across the horizon, the light dims so nothing is struck through. */
+  const want = () => { const v = document.body.dataset.view, tall = document.documentElement.scrollHeight > H * 1.12; return v === "agent" ? 1 : v === "new" ? Math.max(0, 1 - scrollY / 220) : tall ? 0.22 : 1; };
   function draw(t) {
     const breathe = 0.86 + 0.14 * Math.sin(t / 2800);
-    f += (goal() - f) * 0.035;
+    f += (goal() - f) * 0.035; fade += (want() - fade) * (still.matches ? 1 : 0.12);
     ctx.clearRect(0, 0, W, H);
     for (const [x, y, r, ph] of stars) { ctx.fillStyle = `rgba(210,225,255,${(0.2 + 0.4 * Math.abs(Math.sin(t / 2200 + ph))).toFixed(3)})`; ctx.fillRect(x * W - px * 8, y * H - py * 6, r, r); }
+    ctx.globalAlpha = fade;
     const R = Math.max(W * 0.95, H * 1.2), cx = (W > 900 ? W * 0.5 + 125 : W * 0.5) + px * 18, top = H * f + py * 10, cy = top + R;
     const body = ctx.createRadialGradient(cx, top + R * 0.12, R * 0.1, cx, cy, R);
     body.addColorStop(0, "#0c1426"); body.addColorStop(0.35, "#050a16"); body.addColorStop(1, "#020308");
@@ -817,6 +998,7 @@ function startSky() {
     const streak = ctx.createLinearGradient(cx - W * 0.32, 0, cx + W * 0.32, 0);
     streak.addColorStop(0, "rgba(160,210,255,0)"); streak.addColorStop(0.5, `rgba(240,250,255,${(0.45 * breathe).toFixed(3)})`); streak.addColorStop(1, "rgba(160,210,255,0)");
     ctx.fillStyle = streak; ctx.fillRect(cx - W * 0.32, top - 0.6, W * 0.64, 1.2);
+    ctx.globalAlpha = 1;
   }
   function frame(t) { px += (tx - px) * 0.03; py += (ty - py) * 0.03; draw(t); raf = requestAnimationFrame(frame); }
   const start = () => { cancelAnimationFrame(raf); size(); if (still.matches) { f = goal(); draw(0); } else raf = requestAnimationFrame(frame); };
@@ -824,6 +1006,7 @@ function startSky() {
   addEventListener("pointermove", e => { tx = e.clientX / innerWidth - 0.5; ty = e.clientY / innerHeight - 0.5; }, { passive: true });
   document.addEventListener("visibilitychange", () => { cancelAnimationFrame(raf); if (!document.hidden) start(); });
   addEventListener("hashchange", () => { if (still.matches) setTimeout(() => { f = goal(); draw(0); }, 0); });
+  addEventListener("scroll", () => { if (still.matches) draw(0); }, { passive: true });
   still.addEventListener?.("change", start);
   start();
 }
@@ -845,16 +1028,33 @@ async function authenticate() {
     <section class="auth-content" aria-labelledby="login-title">
       <div class="auth-story"><span class="auth-eyebrow">A LITTLE HUMAN DIRECTION.</span><h1>A whole new<br>way to work.</h1><p>Give your agents a purpose.<br>Build a team that goes further.</p><div class="auth-principles"><span>Hire for the job</span><span>Review the work</span><span>Grow their autonomy</span></div></div>
       <div class="auth-card"><span class="auth-eyebrow">WELCOME BACK</span><h2 id="login-title">Your next chapter<br>starts here.</h2><p class="auth-subtitle">Sign in to your team’s workspace.</p>
-        <form id="password-login"><label for="login-username">Username</label><input id="login-username" name="username" autocomplete="username" placeholder="Your username" required maxlength="100" autocapitalize="none" spellcheck="false"><label for="login-password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required maxlength="256"><button class="btn primary" type="submit">Enter your workspace <span aria-hidden="true">↗</span></button><p id="login-error" role="alert" aria-live="polite"></p></form>
-        <p class="auth-help">Need an account? Ask your workspace admin.</p>
+        <form id="password-login"><label for="login-username">Username</label><input id="login-username" name="username" autocomplete="username" placeholder="Your username" required maxlength="100" autocapitalize="none" spellcheck="false"><label for="login-password">Password</label><div class="pw"><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required maxlength="256"><button type="button" class="pw-toggle" id="pw-toggle" aria-pressed="false" aria-controls="login-password">Show</button></div>${config.signup && config.invite_code ? `<div id="invite-row" hidden><label for="login-code">Invite code</label><input id="login-code" name="code" autocomplete="off" placeholder="From the person who invited you" maxlength="100" autocapitalize="none" spellcheck="false"></div>` : ""}<button class="btn primary" type="submit">Enter your workspace ${icon("out")}</button><p id="login-error" role="alert" aria-live="polite"></p></form>
+        ${config.signup ? `<p class="auth-help"><span id="auth-switch-text">New here?</span> <button type="button" class="link-btn" id="auth-switch">Create an account</button></p>` : `<p class="auth-help">Need an account? Ask your workspace admin.</p>`}
       </div>
     </section><footer class="auth-footer"><span>Put your team’s potential in motion.</span><span>ORBIT</span></footer>
   </div>`;
+  $("#pw-toggle").addEventListener("click", e => { const i = $("#login-password"), show = i.type === "password"; i.type = show ? "text" : "password"; e.currentTarget.textContent = show ? "Hide" : "Show"; e.currentTarget.setAttribute("aria-pressed", String(show)); });
+  let creating = false;
+  $("#auth-switch")?.addEventListener("click", () => {
+    creating = !creating;
+    document.querySelector(".auth-card .auth-eyebrow").textContent = creating ? "NEW HERE" : "WELCOME BACK";
+    $("#login-title").innerHTML = creating ? "Create your<br>workspace login." : "Your next chapter<br>starts here.";
+    document.querySelector(".auth-card .auth-subtitle").textContent = creating ? "Pick a username and a password of 12 or more characters." : "Sign in to your team’s workspace.";
+    document.querySelector("#password-login .btn.primary").firstChild.textContent = creating ? "Create account and enter " : "Enter your workspace ";
+    $("#login-password").autocomplete = creating ? "new-password" : "current-password";
+    $("#login-password").minLength = creating ? 12 : 0;
+    const invite = $("#invite-row"); if (invite) invite.hidden = !creating;
+    $("#auth-switch-text").textContent = creating ? "Already have one?" : "New here?";
+    $("#auth-switch").textContent = creating ? "Sign in" : "Create an account";
+    $("#login-error").textContent = "";
+  });
   await new Promise(resolve => {
     $("#password-login").addEventListener("submit", async event => {
-      event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
+      event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button[type=submit]"); button.disabled = true;
       try {
-        const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+        const fields = new FormData(form), payload = { username: fields.get("username"), password: fields.get("password") };
+        if (creating && fields.get("code")) payload.code = fields.get("code");
+        const response = await fetch(creating ? "/api/auth/signup" : "/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         const session = await response.json();
         if (!response.ok) throw Error(session.error?.message || "Sign-in failed.");
         csrfToken = session.csrf_token; user = session.user.id; form.reset(); document.body.classList.remove("auth-screen"); $("#side").hidden = false; resolve();
@@ -866,7 +1066,7 @@ async function authenticate() {
 /* ---------- boot and polling ---------- */
 (async () => {
   startSky();
-  try { await authenticate(); await load(); authReady = true; if (!location.hash && S.agents.length) location.replace("#/agent/" + S.agents[0].id); render(); enter(); }
+  try { await authenticate(); await load(); authReady = true; if (route().name === "files") loadFiles(); if (!location.hash && S.agents.length) location.replace("#/agent/" + S.agents[0].id); render(); enter(); }
   catch (e) { $("#view").innerHTML = `<div class="center-msg"><h2>Can't reach the server</h2><p class="note">Start it with ./run-arcade.command, then reload.</p></div>`; toast(e.message, true); }
 })();
 
@@ -876,7 +1076,7 @@ async function authenticate() {
     const el = document.activeElement, typing = ["INPUT", "TEXTAREA", "SELECT"].includes(el?.tagName) && el.value;
     if (authReady && !busy && !document.hidden && !typing && !$("details.menu[open]") && !["new", "agent"].includes(route().name)) {
       try {
-        const snap = () => JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, S["work-queue"], Object.values(S.steps).map(s => s.updated)]);
+        const snap = () => JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, Object.values(S.steps).map(s => s.updated)]);
         const before = snap(); await load();
         if (before !== snap()) { const open = $$("details.quiet[open]").map(d => d.querySelector("summary")?.textContent); ui.stick = innerHeight + scrollY > document.body.scrollHeight - 200; render(); ui.stick = true; $$("details.quiet").forEach(d => { if (open.includes(d.querySelector("summary")?.textContent)) d.setAttribute("open", ""); }); }
       } catch { /* retry next tick */ }

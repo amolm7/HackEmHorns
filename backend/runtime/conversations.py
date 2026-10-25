@@ -43,8 +43,12 @@ def attach(c, actor, agent, data, run_id):
             earlier = get(c, "runs", conv["last_run_id"])
     else:
         conv = create(c, actor, agent, run_id)
+    if earlier and earlier["status"] in ("failed", "cancelled"):
+        # A stopped task ends only itself. The agent and conversation stay usable:
+        # the next message simply starts fresh, without replaying the broken turn.
+        earlier = None
     if earlier:
-        require(earlier["status"] == "completed", "Wait for the previous task to finish, or start a new conversation.", 409)
+        require(earlier["status"] == "completed", "Wait for the previous task to finish, or start a new conversation.", 409, "task_in_progress")
         require(earlier["mode"] == (data.get("mode") or agent.get("model_profile_id", "demo")), "Use the same model, or start a new conversation.", 409, "conversation_model_conflict")
     conv["last_run_id"] = run_id
     put(c, "agent_conversations", conv)

@@ -1,7 +1,6 @@
 from ..contracts import *
 from ..db import *
 from ..runtime import TERMINAL, public_run, add_step
-from ..quality import check as check_quality
 
 
 def inbox(c, actor, status=None):
@@ -212,24 +211,6 @@ def outcome(c, actor, id, data):
         "Task outcome already recorded.",
         409,
     )
-    if data["success"] and run.get("work_item_id"):
-        item = get(c, "work_items", run["work_item_id"])
-        required = item.get(
-            "required_tools", ["search_tickets", "search_docs", "create_draft"]
-        )
-        successful = {
-            a["tool_id"]
-            for a in all_rows(c, "actions")
-            if a["run_id"] == run["id"]
-            and a["status"] == "executed"
-            and a.get("result")
-        }
-        quality = check_quality(c, run)
-        require(
-            run["status"] == "completed" and quality and quality["passed"],
-            "Accept only work that passes the deliverable checks.",
-            409,
-        )
     result = put(
         c,
         "outcomes",

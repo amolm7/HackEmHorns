@@ -7,6 +7,14 @@ import urllib.request
 from ..contracts import Error, require
 
 
+def model_timeout(config):
+    """Per-request provider timeout in seconds (MODEL_TIMEOUT, default 60, 10-180)."""
+    try:
+        return max(10, min(180, int(config.get("MODEL_TIMEOUT", 60))))
+    except (TypeError, ValueError):
+        return 60
+
+
 def provider_error(provider, exc, secrets=()):
     status = getattr(exc, "code", None)
     retryable = status in {408, 429, 500, 502, 503, 504} if status else True
@@ -31,9 +39,11 @@ def provider_error(provider, exc, secrets=()):
         detail = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[redacted]", detail)
         detail = re.sub(r"\s+", " ", detail).strip()[:240]
         exc.close()
+    slow = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
     message = (
         f"{provider} returned HTTP {status}" + (f": {detail}" if detail else ".")
         if status
+        else f"{provider} took too long to respond." if slow
         else f"{provider} could not be reached."
     )
     return Error(
@@ -78,6 +88,9 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
         "systemInstruction": {"parts": [{"text": instruction}]},
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
     }
+    level = str(config.get("GEMINI_THINKING", "")).strip().lower()
+    if level in ("minimal", "low", "medium", "high"):
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": level}
     if tools:
         payload["tools"] = [
             {
@@ -97,7 +110,7 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
     )
     try:
         with urllib.request.urlopen(
-            req, timeout=40, context=ssl.create_default_context(cafile=certifi.where())
+            req, timeout=model_timeout(config), context=ssl.create_default_context(cafile=certifi.where())
         ) as r:
             out = json.load(r)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
@@ -195,7 +208,7 @@ def meta_generate(config, contents, instruction, tools=None, structured=False):
     )
     try:
         with urllib.request.urlopen(
-            req, timeout=45, context=ssl.create_default_context(cafile=certifi.where())
+            req, timeout=model_timeout(config), context=ssl.create_default_context(cafile=certifi.where())
         ) as response:
             data = json.load(response)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:

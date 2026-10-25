@@ -1,8 +1,10 @@
+import threading
 import json
 from ..contracts import *
 from ..db import *
 from ..registry import capability, check_bindings, validate, list_catalog
 from ..runtime import model
+from ..github import GITHUB_TOOLS
 
 
 def check_manager(c, actor, department_id, manager_id):
@@ -158,7 +160,91 @@ def proposal_access(actor, p):
     )
 
 
-def message(c, app, actor, id, data):
+SETUP_TIMEOUT = 45
+
+
+def setup_request(c, actor, messages, previous, data):
+    """Build the setup-model request from a database snapshot. No network I/O here."""
+    selected = data.get("capability_ids")
+    if selected is not None:
+        require(isinstance(selected, list) and 0 < len(selected) <= 10, "Choose 1–10 capability IDs.")
+        for cap_id in selected:
+            capability(c, actor, cap_id)
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "text": json.dumps(
+                        {
+                            "conversation": messages,
+                            "current_draft": previous,
+                            "selected_capability_ids": selected,
+                            "job_description": data.get("job_description"),
+                        }
+                    )
+                }
+            ],
+        }
+    ]
+    instruction = (
+        "You are a Recruiter setup helper. Available capabilities: "
+        + "; ".join(f"{x['id']} ({x['description']})" for x in list_catalog(c, actor))
+        + ". Tailor the instructions to the described job: define its purpose, audience, content priorities, tone, and expected output when supplied. Do not simply repeat the tool descriptions or invent unspecified business details. When selected_capability_ids is supplied, keep exactly those capabilities; the job description does not grant extra tools or permissions. Return JSON with name, job_description, instructions, capability_ids (array of catalog IDs), and kind (hire or capability). Only use capability to add tools when a target_agent_id has been explicitly supplied by the application. Do not invent connections, permissions, roles, departments or managers. Never claim a test or hire occurred. Only the capabilities listed above exist for this person; GitHub reading appears in that list only when it is published and authorized. Agents never send email, publish, or write to GitHub: they only save drafts and files in the workspace."
+    )
+    return contents, instruction
+
+
+def setup_generate(app, request, mode):
+    """The slow part. Runs with a hard time limit and must never hold a database lock."""
+    contents, instruction = request
+    box = {}
+
+    def call():
+        try:
+            box["out"] = model.generate(app.config, contents, instruction, structured=True, provider=mode)
+        except BaseException as exc:  # re-raised on the calling thread
+            box["err"] = exc
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(int(app.config.get("SETUP_TIMEOUT", SETUP_TIMEOUT)))
+    if worker.is_alive():
+        raise Error(
+            "The model took too long to set this agent up. Try again, or create it on another model.",
+            504, "provider_timeout", {"retryable": True},
+        )
+    if "err" in box:
+        raise box["err"]
+    content, _ = box["out"]
+    try:
+        parsed = json.loads("".join(p.get("text", "") for p in content["parts"]))
+    except ValueError:
+        raise Error("Recruiter returned invalid JSON.", 502, "provider_error")
+    require(isinstance(parsed, dict), "Recruiter returned an invalid proposal.", 502)
+    return parsed
+
+
+def pregenerate(app, user_id, data):
+    """Quick-create: do the model call before the write transaction opens, so a slow
+    or stalled provider cannot freeze every other request."""
+    mode = data.get("model_profile_id", "demo")
+    if mode == "demo" or (data.get("capability_ids") and not data.get("description")):
+        return None
+    require(mode in ["gemini", "meta"], "Unknown helper mode.")
+    msg = string(data.get("description") or "Create an agent with the selected capabilities.", "message", 4000)
+    with app.db.transaction(False) as c:
+        actor = app.actor(c, user_id)
+        roles(actor, "admin", "manager", "builder")
+        request = setup_request(
+            c, actor,
+            [{"role": "user", "text": msg, "created_at": now()}], {},
+            {"capability_ids": data.get("capability_ids"), "job_description": data.get("description")},
+        )
+    return setup_generate(app, request, mode)
+
+
+def message(c, app, actor, id, data, parsed=None):
     roles(actor, "admin", "manager", "builder")
     conv = get(c, "conversations", id)
     in_org(actor, conv)
@@ -171,54 +257,16 @@ def message(c, app, actor, id, data):
     previous = old["spec"] if old and old["status"] == "draft" else {}
     mode = data.get("mode", "demo")
     require(mode in ["demo", "gemini", "meta"], "Unknown helper mode.")
-    parsed = {}
     provider = "guided"
     if mode != "demo":
-        # Resolve explicit selections before sending anything to the setup model.
-        selected = data.get("capability_ids")
-        if selected is not None:
-            require(isinstance(selected, list) and 0 < len(selected) <= 10, "Choose 1–10 capability IDs.")
-            for cap_id in selected:
-                capability(c, actor, cap_id)
-        content, _ = model.generate(
-            app.config,
-            [
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "text": json.dumps(
-                                {
-                                    "conversation": conv["messages"],
-                                    "current_draft": previous,
-                                    "selected_capability_ids": selected,
-                                    "job_description": data.get("job_description"),
-                                }
-                            )
-                        }
-                    ],
-                }
-            ],
-            "You are a Recruiter setup helper. Available capabilities: "
-            + "; ".join(
-                f"{x['id']} ({x['description']})" for x in list_catalog(c, actor)
-            )
-            + ". Tailor the instructions to the described job: define its purpose, audience, content priorities, tone, and expected output when supplied. Do not simply repeat the tool descriptions or invent unspecified business details. When selected_capability_ids is supplied, keep exactly those capabilities; the job description does not grant extra tools or permissions. Return JSON with name, job_description, instructions, capability_ids (array of catalog IDs), and kind (hire or capability). Only use capability to add tools when a target_agent_id has been explicitly supplied by the application. Do not invent connections, permissions, roles, departments or managers. Never claim a test or hire occurred. No GitHub, email sending or other external integrations are connected.",
-            structured=True,
-            provider=mode,
-        )
-        try:
-            parsed = json.loads("".join(p.get("text", "") for p in content["parts"]))
-        except ValueError:
-            raise Error("Recruiter returned invalid JSON.", 502, "provider_error")
-        require(
-            isinstance(parsed, dict), "Recruiter returned an invalid proposal.", 502
-        )
+        if parsed is None:
+            parsed = setup_generate(app, setup_request(c, actor, conv["messages"], previous, data), mode)
         provider = mode
+    parsed = parsed or {}
     lower = msg.lower()
     if "github" in lower:
         require(any(item["id"] == "github-reading" for item in list_catalog(c, actor)),
-                "Ask an admin to add GitHub from Library before creating a GitHub agent.",
+                "Ask an admin to prepare GitHub first, then publish the GitHub tool from Library before creating a GitHub agent.",
                 409, "github_not_connected")
     if mode == "demo" and any(
         w in lower
@@ -250,6 +298,12 @@ def message(c, app, actor, id, data):
     if target:
         manage(actor, target)
         require(target["status"] != "archived", "Archived agents cannot be changed.", 409)
+    model_id = data.get("model_profile_id") or (target or {}).get("model_profile_id") or previous.get("model_profile_id") or "demo"
+    require(
+        model_id != "demo" or not any(t in GITHUB_TOOLS for cap in chosen for t in cap["tools"]),
+        "GitHub reading needs a live model. Pick Meta or Gemini, since the Demo model can't read repositories.",
+        409, "github_requires_live_model",
+    )
     spec = {
         **previous,
         "name": data.get("name")
@@ -359,6 +413,7 @@ def confirm(c, actor, id, data):
         409,
         "stale_proposal",
     )
+    require(p["status"] != "rejected", "This request was already turned down.", 409, "proposal_rejected")
     spec = p["spec"]
     manage(actor, {"org_id": p["org_id"], "manager_id": spec.get("manager_id")})
     if p["status"] == "confirmed":
@@ -410,6 +465,19 @@ def confirm(c, actor, id, data):
         {"resource_id": agent["id"], "revision": p["revision"]},
     )
     return agent
+
+
+def reject(c, actor, id, data):
+    """Turn down a waiting agent request. The asker can also withdraw their own."""
+    p = get(c, "proposals", id)
+    proposal_access(actor, p)
+    require(p["status"] == "draft", "Only a waiting request can be turned down.", 409, "proposal_not_waiting")
+    if actor["id"] != p.get("actor_id"):
+        manage(actor, {"org_id": p["org_id"], "manager_id": p["spec"].get("manager_id")})
+    p.update(status="rejected", rejected_by=actor["id"], rejected_at=now(), rejection_reason=(data.get("reason") or "")[:300])
+    put(c, "proposals", p)
+    audit(c, actor, "proposal.rejected", id, {"reason": p["rejection_reason"]})
+    return p
 
 
 def patch_agent(c, actor, id, data):
@@ -495,7 +563,7 @@ def patch_agent(c, actor, id, data):
     return new
 
 
-def quick_create(c, app, actor, data):
+def quick_create(c, app, actor, data, parsed=None):
     """Use the same validated recruiter policy, in one replay-protected transaction."""
     conv = conversation(c, actor)
     payload = {
@@ -517,7 +585,7 @@ def quick_create(c, app, actor, data):
     for key in ("name", "capability_ids"):
         if data.get(key):
             payload[key] = data[key]
-    result = message(c, app, actor, conv["id"], payload)
+    result = message(c, app, actor, conv["id"], payload, parsed)
     proposal = result["proposal"]
     can_confirm = "admin" in actor["roles"] or (
         "manager" in actor["roles"] and proposal["spec"]["manager_id"] == actor["id"]

@@ -127,7 +127,7 @@ class GitHubWorkflowTests(unittest.TestCase):
                 user="amol", key="publish:" + repository)
         return result
 
-    def test_preparing_a_connection_does_not_publish_a_library_tool(self):
+    def test_preparing_a_connection_adds_the_default_library_tool_once(self):
         self.assertNotIn("github-reading", [c["id"] for c in self.call("GET", "capabilities")])
         with patch.object(self.app.github, "discover") as discover:
             with self.assertRaises(Error):
@@ -139,7 +139,11 @@ class GitHubWorkflowTests(unittest.TestCase):
                 self.call("POST", "integrations/github/connect", {"repository": "team/repo", "department_id": "support"}, user="amol")
         self.assertNotIn("github-reading", [c["id"] for c in self.call("GET", "capabilities")])
         self.connect(publish=False)
-        self.assertNotIn("github-reading", [c["id"] for c in self.call("GET", "capabilities")])
+        default = [c for c in self.call("GET", "capabilities") if c["id"] == "github-reading"]
+        self.assertEqual([c["name"] for c in default], ["Read GitHub repositories"])
+        self.assertEqual(sorted(default[0]["tools"]), sorted(GITHUB_TOOLS))
+        self.connect(publish=False, repository="team/other")  # preparing again never duplicates it
+        self.assertEqual(sum(c["id"] == "github-reading" for c in self.call("GET", "capabilities")), 1)
         created = self.connect()
         self.assertEqual(created["name"], "Repository Reader")
         self.assertIn("Explain repository architecture and issues", created["skill"])
@@ -216,7 +220,7 @@ class GitHubWorkflowTests(unittest.TestCase):
                 final = self.call("GET", "runs/" + run["id"])
                 self.assertEqual(final["status"], "completed", final)
                 self.assertIn(repository, generate.call_args.args[2])
-                self.assertIn("Explain repository architecture and issues", generate.call_args.args[2])
+                self.assertIn("explain its purpose, code and next steps", generate.call_args.args[2])
                 steps = self.call("GET", "runs/" + run["id"] + "/steps")
                 self.assertEqual([s["label"] for s in steps if s["kind"] == "tool"], ["github_read_file", "create_slideshow"])
                 self.assertTrue(any(s.get("data", {}).get("result", {}).get("kind") == "slideshow" for s in steps))
@@ -225,7 +229,12 @@ class GitHubWorkflowTests(unittest.TestCase):
     def test_live_model_repository_and_connection_permissions_are_required(self):
         self.connect()
         with patch.object(self.app.github, "discover", return_value=list(GITHUB_TOOLS.values())):
-            _, agent = self.hire("GitHub", ["github-reading"])
+            with self.assertRaises(Error) as blocked:
+                self.hire("GitHub", ["github-reading"])
+            self.assertEqual(blocked.exception.code, "github_requires_live_model")
+            _, agent = self.hire("GitHub", ["github-reading"], model_profile_id="meta")
+        # An older agent that was already saved on the Demo model still can't run GitHub reads.
+        test_workspace.use_model(self.app, agent["id"], "demo")
         with self.assertRaises(Error) as caught:
             self.call("POST", f"agents/{agent['id']}/runs", {"task": "Read README", "repository": "team/repo"}, key="demo")
         self.assertEqual(caught.exception.code, "github_requires_live_model")
@@ -248,12 +257,12 @@ class GitHubWorkflowTests(unittest.TestCase):
         self.connect()
         with patch.object(self.app.github, "discover", return_value=list(GITHUB_TOOLS.values())):
             with self.assertRaises(Error) as caught:
-                self.hire("Read GitHub", ["github-reading"], department_id="engineering")
+                self.hire("Read GitHub", ["github-reading"], department_id="engineering", model_profile_id="meta")
             self.assertEqual(caught.exception.code, "connection_denied")
             self.app.github.token = "rotated-token"
             self.assertFalse(self.call("GET", "integrations/github")["connected"])
             with self.assertRaises(Error) as caught:
-                self.hire("Read GitHub", ["github-reading"])
+                self.hire("Read GitHub", ["github-reading"], model_profile_id="meta")
             self.assertEqual(caught.exception.code, "connection_denied")
 
     def test_repository_changes_require_a_new_conversation(self):

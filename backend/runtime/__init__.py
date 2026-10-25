@@ -9,8 +9,7 @@ import fcntl
 from ..contracts import *
 from ..db import *
 from ..registry import capability, resolve, TOOLS, playbooks_for
-from . import model, demo, conversations
-from ..quality import check as check_quality
+from . import model, demo, conversations, deliverables, history
 from ..github import GITHUB_TOOLS, GITHUB_SKILL, repository_name
 
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -113,32 +112,41 @@ def scoped_tools(c, actor, agent, run):
 
 
 def finish(c, run, result):
-    quality = check_quality(c, run)
-    run["quality"] = quality
-    if quality:
-        add_step(c, run, "validation", "Deliverable checks", quality)
-    if quality and not quality["passed"]:
-        failures = [x["detail"] for x in quality["checks"] if not x["passed"]]
-        if run["mode"] != "demo" and run.get("repair_attempts", 0) < 1:
+    """Complete a run, but only claim a deliverable that an executed tool really saved."""
+    gaps = []
+    if run["mode"] != "demo":
+        actor, agent = get(c, "users", run["actor_id"]), get(c, "agents", run["agent_id"])
+        held = set(allowed_tools(c, actor, agent))
+        done = [
+            a["tool_id"] for a in rows_for(c, "actions", "run_id", run["id"])
+            if a["run_id"] == run["id"] and a["status"] == "executed"
+        ]
+        gaps = deliverables.missing(run["task"], held, done)
+        if gaps:
+            add_step(c, run, "validation", "Deliverable check", {"passed": False, "missing": gaps})
+    if gaps:
+        used = sum(
+            a["run_id"] == run["id"] and a["status"] == "executed"
+            for a in rows_for(c, "actions", "run_id", run["id"])
+        )
+        if run.get("repair_attempts", 0) < 1 and used < run["max_steps"]:
             run["repair_attempts"] = run.get("repair_attempts", 0) + 1
-            run["contents"].append(
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "text": "Deliverable validation failed. Repair the deliverables using the permitted tools before finishing: "
-                            + "; ".join(failures)
-                        }
-                    ],
-                }
-            )
+            run["contents"].append({
+                "role": "user",
+                "parts": [{
+                    "text": "Nothing has been saved yet: no " + deliverables.labels(gaps)
+                    + " tool call has succeeded. Call " + ", ".join(gaps)
+                    + " now using the evidence you already have. Do not say it is saved until the tool succeeds."
+                }],
+            })
             run.update(status="queued", result=None, updated_at=now())
         else:
             run.update(
                 status="failed",
                 result=result,
-                error="Deliverable validation failed: " + "; ".join(failures),
-                error_code="deliverable_validation",
+                error="The agent finished without actually saving the " + deliverables.labels(gaps)
+                + ". Nothing was saved. Try again, or ask for it more specifically.",
+                error_code="deliverable_missing",
                 updated_at=now(),
                 finished_at=now(),
             )
@@ -270,20 +278,20 @@ def start(c, app, actor, agent_id, data):
             409,
             "model_not_configured",
         )
-    limit = data.get("max_steps", 8)
+    limit = data.get("max_steps", 12)
     require(type(limit) is int and 1 <= limit <= 20, "max_steps must be 1–20.")
     task = string(data.get("task"), "task", 4000)
     run_id, contents = uid(), []
     conv, earlier = conversations.attach(c, actor, agent, data, run_id)
     repository = None
     if any(name in GITHUB_TOOLS for name in allowed_tools(c, actor, agent)):
-        require(app.github.configured, "Configure GitHub and reconnect it from Library.", 409, "github_not_configured")
+        require(app.github.configured, "GitHub is not set up on this server. Ask an admin to prepare the GitHub connection, then try again.", 409, "github_not_configured")
         for binding in agent["bindings"]:
             cap = capability(c, actor, binding["capability_id"])
             if any(name in GITHUB_TOOLS for name in cap["tools"]):
                 connection = get(c, "connections", binding["connection_id"])
                 require(connection.get("credential_version") == digest(app.github.token),
-                        "GitHub configuration changed. Reconnect from Library.", 409, "connection_denied")
+                        "The GitHub connection was changed. Ask an admin to prepare it again, then try again.", 409, "connection_denied")
         require(mode != "demo", "GitHub reading needs a live model. Create this agent with Meta or Gemini.",
                 409, "github_requires_live_model")
         repository = repository_name(data.get("repository") or (earlier or {}).get("repository"))
@@ -292,8 +300,9 @@ def start(c, app, actor, agent_id, data):
     if data.get("follow_up_of"):
         require(mode != "demo", "Follow-up questions need a live model.", 409, "follow_up_unavailable")
     if earlier and mode != "demo":
-        require(len(json.dumps(earlier["contents"])) < 60000, "This conversation is too long. Start a new one.", 409)
-        contents = earlier["contents"] + [{"role": "user", "parts": [{"text": task}]}]
+        contents = history.compact(earlier["contents"], budget=60000)
+        require(history.size(contents) < 140000, "This conversation is too long. Start a new one.", 409, "history_too_long")
+        contents = contents + [{"role": "user", "parts": [{"text": task}]}]
     run = {
         "repository": repository,
         "id": run_id,
@@ -490,7 +499,7 @@ class Runtime:
                 attempts = run.get("retry_count", 0)
                 retryable = (
                     isinstance(exc, Error)
-                    and exc.code == "provider_error"
+                    and exc.code in ("provider_error", "provider_timeout", "github_error")
                     and exc.details.get("retryable")
                 )
                 if retryable and attempts < self.max_retries:
@@ -732,6 +741,25 @@ class Runtime:
                         f"\n[{name}]\n{text}" for name, text in playbooks
                     )
                 declarations = [x["tool"] for x in options.values()]
+                used = sum(
+                    a["run_id"] == id and a["status"] == "executed"
+                    for a in rows_for(c, "actions", "run_id", id)
+                )
+                held = set(options)
+                keep = deliverables.reserve(run["task"], held)
+                if options:
+                    instruction += (
+                        f"\n\nTool budget: {used} of {run['max_steps']} calls used, {max(0, run['max_steps'] - used)} left."
+                        + (
+                            f" Keep the last {keep} call(s) for saving the deliverable"
+                            + (" (" + deliverables.labels(deliverables.requested(run["task"], held)) + ")" if deliverables.requested(run["task"], held) else "")
+                            + ". Read only what you need, then save it; do not keep exploring."
+                            if keep else ""
+                        )
+                    )
+                contents = history.compact(run["contents"], budget=100000)
+                if contents is not run["contents"]:
+                    run["contents"] = contents
                 require(
                     run["usage"]["output_tokens"]
                     < int(self.app.config.get("MAX_RUN_OUTPUT_TOKENS", 20000)),
@@ -740,7 +768,7 @@ class Runtime:
                     "token_budget",
                 )
                 require(
-                    run["model_turns"] < run["max_steps"] + 2,
+                    run["model_turns"] < run["max_steps"] + 4,
                     "Model turn limit reached.",
                     409,
                 )
@@ -817,14 +845,40 @@ class Runtime:
                     a["run_id"] == id and a["status"] == "executed"
                     for a in all_rows(c, "actions")
                 )
+                fn = run["queue"][0]
+                options = scoped_tools(c, actor, agent, run)
+                keep = deliverables.reserve(run["task"], set(options))
+                if (
+                    run["mode"] != "demo"
+                    and fn["name"] in options
+                    and fn["name"] not in deliverables.ARTIFACT_TOOLS
+                    and count >= run["max_steps"] - keep
+                    and keep
+                ):
+                    # Reading would use the calls needed to save the deliverable.
+                    # Tell the model, instead of failing the whole task.
+                    run["queue"].pop(0)
+                    reply = {"name": fn["name"], "response": {
+                        "error": "budget_reserved",
+                        "message": "No more reading: the remaining tool calls are kept for saving the deliverable. Use the evidence you already have and save it now.",
+                    }}
+                    if fn.get("id"):
+                        reply["id"] = fn["id"]
+                    run["batch_responses"].append({"functionResponse": reply})
+                    add_step(c, run, "plan", "Skipped a read to keep room for saving",
+                             {"tool": fn["name"], "used": count, "limit": run["max_steps"], "reserved": keep})
+                    if not run["queue"]:
+                        run["contents"].append({"role": "user", "parts": run["batch_responses"]})
+                        run["batch_responses"] = []
+                    run["updated_at"] = now()
+                    put(c, "runs", run)
+                    return
                 require(
                     count < run["max_steps"],
-                    "Maximum tool calls reached.",
+                    "This task used all of its tool calls before finishing. Nothing else was lost; ask again with a narrower request.",
                     409,
                     "step_limit",
                 )
-                fn = run["queue"][0]
-                options = scoped_tools(c, actor, agent, run)
                 require(
                     fn["name"] in options,
                     "Model requested a tool outside the agent allowlist.",
@@ -952,7 +1006,7 @@ class Runtime:
             with self.app.db.transaction() as c:
                 connection = get(c, "connections", pending["connection_id"])
                 require(connection.get("credential_version") == digest(self.app.github.token),
-                        "GitHub configuration changed. Reconnect from Library.", 409, "connection_denied")
+                        "The GitHub connection was changed. Ask an admin to prepare it again, then try again.", 409, "connection_denied")
             result = self.app.github.call(pending["tool_id"], pending["arguments"], run["repository"])
         else:
             result = self.app.mcp.call(

@@ -15,7 +15,7 @@ python server.py
 
 Open **http://localhost:8000**. Database state persists in `data/workforce.sqlite3`. Start one application process per database. Use the VS Code `Run backend` task or run the command from its terminal.
 
-Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 55 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
+Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 51 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
 
 The server binds to localhost. Set `AUTH_MODE=password` after provisioning an account with `scripts/create_user.py` for real username/password sign-in. Without that setting, the identity selector remains a **local development impersonation facility**. Production mode refuses development authentication. See [backend operations](docs/OPERATIONS.md) for setup, recovery, limits and deployment prerequisites.
 
@@ -77,6 +77,10 @@ node tests/test_frontend_contracts.js
 
 Run commands inside the activated `.venv`. Tests use real loopback MCP and FastAPI TestClient with isolated temporary databases; the demo script additionally exercises live Uvicorn HTTP. Provider network responses are mocked for deterministic tests. They cover pause-before-call, authorization, duplicate/concurrent decisions, rejection, revision, restart recovery, local write deduplication, connection revocation, spec invalidation, trust reset, marketplace portability, metrics, model adapters, and transport errors. Mocked provider tests do not verify your credentials or live model availability.
 
+## Deploying a public demo
+
+`docs/DEPLOY.md` covers hosting on Render with GitHub Actions: tests on every pull request, and a deploy plus a live sign-up smoke test on every push to `main`. Testers create their own accounts and share one organisation; the GitHub tool is prepared on first boot from environment variables.
+
 ## Modules / four work areas
 
 | Original owner | Implementation |
@@ -92,15 +96,15 @@ See **docs/API.md** for all endpoints and payloads, and **docs/IMPLEMENTATION.md
 
 ## Scope
 
-### GitHub demo: connect in the UI, then combine capabilities
+### GitHub demo: one admin token, prepared in the UI
 
-GitHub is a pre-registered **read-only MCP adapter**. Prepare the connector before the demo. During the demo, a manager or admin creates a named Library tool backed by that ready connector; the UI does not generate an arbitrary executable integration.
+GitHub is a pre-registered **read-only MCP adapter**. The server holds one admin-provided token and every agent reads GitHub with it, so give that token access only to repositories the whole team may see (ideally from a bot account) and revoke it when the demo ends. The UI does not generate arbitrary executable integrations.
 
-1. Create a fine-grained GitHub personal access token with access to the repositories you want to demonstrate. Grant **Contents: read** and **Issues: read**. Add `GITHUB_PERSONAL_ACCESS_TOKEN=...` to your local ignored `.env`, then restart the server. Do not paste the token into the app, a task, or Git.
-2. Before the demo, run `.venv/bin/python scripts/prepare_github.py --repository github/github-mcp-server --department support --department engineering`. This tests the connector and saves its department access without creating any Library tool.
-3. During the demo, sign in as a manager or admin and scroll to **Add a tool** at the bottom of Library. Enter a name and description, choose **GitHub · connected**, select a department, and click **Add tool**. No existing action checkboxes or connection setup are needed.
-3. Click **Use** on **Read GitHub repositories**. Add **Make a slideshow** and/or **Write a document** to the agent. Choose an enabled **Meta or Gemini** model and create it. A builder's agent still needs manager confirmation.
-5. In the agent chat, enter a GitHub repository URL in the repository field. This can differ from the setup test repository, provided the configured token permits access.
+1. As the admin, create a fine-grained GitHub personal access token for the repositories you want to demonstrate. Grant **Contents: read** and **Issues: read**. Add `GITHUB_PERSONAL_ACCESS_TOKEN=...` on its own line in your ignored `.env` (never paste it into the app, a task or Git), then restart the server.
+2. Sign in as an admin, open **Library** and scroll to **Add a tool**. Choose **GitHub · needs setup**, enter a repository the token can read and click **Prepare GitHub**. (`scripts/prepare_github.py` does the same from a terminal.) This tests the token and turns GitHub on for your departments.
+3. **Read GitHub repositories** now appears in the Library tools by itself. A manager or admin can also add differently named GitHub tools from **Add a tool** at the bottom of Library.
+4. Click **Use** on it. Add **Make a slideshow** and/or **Write a document** if you like. Choose an enabled **Meta or Gemini** model and create it. A builder's agent still needs manager confirmation.
+5. In the agent chat, enter a GitHub repository URL in the repository field. It can differ from the setup repository, provided the token can read it.
 6. Send: **“Read the README and open issues. Save a 5-slide briefing covering the purpose, current priorities, risks, and next steps. Cite source URLs and distinguish facts from recommendations.”**
 7. Show the actual GitHub tool evidence and the saved slides. Start **New conversation** to choose another repository; follow-ups keep their repository context. You can also share the agent template through its menu.
 
@@ -120,23 +124,13 @@ References: [Meta tool calling](https://dev.meta.ai/docs/tool-calling), [Meta st
 
 - Preloaded capabilities: **Make a slideshow**, **Write a document**, **Analyze data**, **Research & summarize**, **Schedule meetings**, **Draft emails**, **Plan tasks** (plus the labeled support sandbox). Saving tools use risk `local_write`. Under per-action policy, agents set to "Runs alone" may read and save locally; restricted drafts still ask. The default agent-level policy approves the scoped agent once.
 - Agent creation: choose a model, pick capabilities and/or describe the job, review, create. Managers confirm the scoped agent; optional per-action policy exposes "Asks first" and "Runs alone" controls. Follow-up questions continue a live conversation.
+- Files: everything agents saved (slides, documents, email drafts, meetings, task lists, analyses), newest first, each with a download. Slides, documents and task lists download as Markdown, email drafts as `.eml` and meetings as `.ics`.
+- Data agents accept a CSV: use the paperclip in the message box. A message is limited to 4,000 characters, roughly 100 rows.
+- Approvals: a manager sees what a new agent will do before approving, and can **Decline** it; its asker can **Withdraw** it.
 - Leaderboard: result quality (thumbs up/down on results), approval rate, capability usage and creator usage.
 - `read_url` fetches only public http(s) pages (private/loopback addresses blocked, redirects re-checked). Connections pin validated public IPs while preserving TLS hostname checks. Public deployment still needs the controls in [operations](docs/OPERATIONS.md).
 - Design: "Mission control" (dark glass, 3D globe backdrop). See `docs/DESIGN.md`.
 
-
-## Outcome-driven work queue
-
-Open **Team work** (the default home page). Choose **Product launch**, **Growth analysis**, or **Decision brief**, or add a custom job with its source inputs and company constraints. The support queue remains under Other examples.
-
-1. Load a fictional scenario. Repeated loads do not duplicate it.
-2. Hire the suggested specialist or reuse an agent with the required capabilities. Company permissions and connection validation still apply.
-3. Assign an owner and select Demo or an enabled live model. Demo uses explicitly labeled templates; live models produce original tool arguments. Analysis jobs in demo mode require CSV input.
-4. Review results in Inbox and Team work. With per-action approval enabled, Interns ask before every action; Associates can read and save locally within existing permissions. The default policy approves the agent once. Nothing is sent, published or purchased.
-5. Review the deliverables together in Team work. Product launch requires analysis, a brief, and a deck before it can be accepted. Outcome review is separate from tool approval.
-6. Mark work accepted or needing correction with notes. Corrected, failed, or cancelled work can be reassigned; the new attempt receives correction notes and prior runs remain in the agent audit trail.
-
-Queue records and assignments persist in SQLite. Metrics show actual outcomes and execution turnaround, including time spent waiting for action review; they do not estimate hours saved. Sample intake is manual, with no email/CRM trigger or external routing integration. Routing labels are recommendations. API operations: `GET/POST /api/work-queue`, `POST /api/work-queue/sample-batch`, and per-item `/assign` and `/review`.
 
 The redesigned UI uses atomic quick creation, durable task conversations, authenticated activity updates, and soft archiving. See `docs/BACKEND-NOTES.md` for the completed backend handoff and remaining scope.
 

@@ -135,6 +135,11 @@ class GitHubMCP:
                         raw = response.read(2_000_001)
             except urllib.error.HTTPError as exc:
                 status = exc.code
+                try:
+                    wait = min(60, max(0, int(exc.headers.get("Retry-After", "0"))))
+                except (AttributeError, TypeError, ValueError):
+                    wait = 0
+                limited = exc.headers.get("X-RateLimit-Remaining") == "0" if exc.headers else False
                 exc.close()
                 message = {
                     401: "GitHub rejected the token. Check its value and expiry.",
@@ -142,9 +147,13 @@ class GitHubMCP:
                     404: "Repository or file not found, or the GitHub token cannot access it.",
                     429: "GitHub rate limit reached. Try again later.",
                 }.get(status, "GitHub MCP request failed. Check the connection and try again.")
-                raise Error(message, 502, "github_error")
+                # Transient failures (and rate limits, which GitHub reports as 403) are retried by the
+                # worker with backoff. Bad tokens, missing repositories and real denials are not.
+                transient = status in (408, 429, 500, 502, 503, 504) or (status == 403 and (limited or wait))
+                raise Error(message, 502, "github_error", {"retryable": bool(transient), "retry_after": wait})
             except (urllib.error.URLError, TimeoutError, OSError):
-                raise Error("GitHub MCP could not be reached. Check the network and try again.", 502, "github_error")
+                raise Error("GitHub MCP could not be reached. Check the network and try again.", 502, "github_error",
+                            {"retryable": True, "retry_after": 0})
             require(len(raw) <= 2_000_000, "GitHub response exceeded the read limit.", 502, "github_error")
             if notification:
                 return {}
@@ -192,9 +201,21 @@ class GitHubMCP:
             require(set(args) == {"state"} and args["state"] in {"OPEN", "CLOSED"}, "Choose OPEN or CLOSED issues.")
             remote_args.update(state=args["state"], perPage=10)
         result = self._session("tools/call", {"name": self.REMOTE_TOOLS[name], "arguments": remote_args})
-        require(not result.get("isError"),
-                "GitHub could not read this repository or path. Check its name and the token's repository permissions.",
-                502, "github_error")
+        if result.get("isError"):
+            detail = " ".join(
+                block.get("text", "") for block in result.get("content", [])
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            )
+            if self.token:
+                detail = detail.replace(self.token, "[redacted]")
+            if re.search(r"not found|404|no such file|does not exist|could not find", detail, re.I) and name == "github_read_file":
+                # A wrong guessed path is recoverable: let the model list the directory or try another file.
+                return {"source": "github_mcp", "repository": repo, "url": "https://github.com/" + repo,
+                        "error": "path_not_found", "text": "",
+                        "message": "That path does not exist in this repository. List the parent directory (read its path) or try another file. Do not retry the same path.",
+                        "scope": "Selected file/directory."}
+            raise Error("GitHub could not read this repository or path. Check its name and the token's repository permissions.",
+                        502, "github_error", {"retryable": False})
         chunks = []
         for block in result.get("content", []):
             if not isinstance(block, dict):

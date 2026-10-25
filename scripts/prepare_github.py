@@ -1,4 +1,4 @@
-"""Prepare the GitHub connector before a demo, without adding a Library tool."""
+"""Prepare the GitHub connector from a terminal (same as Prepare GitHub in Library)."""
 import argparse
 import os
 from pathlib import Path
@@ -28,8 +28,8 @@ def main():
     try:
         for department in args.department:
             connect_github(app, args.actor, {"repository": args.repository, "department_id": department})
-        print("GitHub connector tested and prepared. No Library tools were created.")
-        print("During the demo: Library > Add a tool > name and description > GitHub > Add tool.")
+        print("GitHub connector tested and prepared. Read GitHub repositories is now in the Library tools.")
+        print("Optional: Library > Add a tool > GitHub adds another named tool.")
     except Error as exc:
         print(str(exc), file=sys.stderr)
         return 1

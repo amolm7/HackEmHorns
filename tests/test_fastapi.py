@@ -41,26 +41,6 @@ class FastAPITransportTests(unittest.TestCase):
         self.assertEqual(result.json()["status"], "created")
         return result.json()["agent"]
 
-    def test_work_queue_http_assignment(self):
-        agent = self.hire()
-        batch = self.post("work-queue/sample-batch", {"workflow": "support"})
-        self.assertEqual(batch.status_code, 200, batch.text)
-        item = batch.json()[0]
-        response = self.post(
-            "work-queue/" + item["id"] + "/assign",
-            {"agent_id": agent["id"], "mode": "demo"},
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        repeated = self.post(
-            "work-queue/" + item["id"] + "/assign",
-            {"agent_id": agent["id"], "mode": "demo"},
-        )
-        self.assertEqual(repeated.status_code, 409)
-        bad = self.post(
-            "work-queue", {"workflow": "unknown", "title": "test", "task": "test"}
-        )
-        self.assertEqual(bad.status_code, 422)
-
     def test_real_fastapi_routes_and_openapi_contract(self):
         self.assertIsInstance(self.api, FastAPI)
         response = self.client.get("/openapi.json")
@@ -72,7 +52,7 @@ class FastAPITransportTests(unittest.TestCase):
                 for path in schema["paths"].values()
                 for method in path
             ),
-            55,
+            52,
         )
         run = schema["paths"]["/api/agents/{agent_id}/runs"]["post"]
         self.assertEqual(

@@ -1,7 +1,7 @@
 from uuid import UUID
 from fastapi import APIRouter
 from .common import Context, IdempotentContext
-from .schemas import ProposalConfirm, AgentPatch, QuickCreate, AgentCapabilities
+from .schemas import ProposalConfirm, ProposalReject, AgentPatch, QuickCreate, AgentCapabilities
 
 router = APIRouter(prefix="/api", tags=["Recruiter & workforce"])
 
@@ -14,6 +14,13 @@ def proposals(ctx: Context) -> list[dict]:
 @router.post("/recruiter/proposals/{proposal_id}/confirm")
 def confirm_proposal(
     proposal_id: UUID, body: ProposalConfirm, ctx: IdempotentContext
+) -> dict:
+    return ctx.dispatch(body)
+
+
+@router.post("/recruiter/proposals/{proposal_id}/reject")
+def reject_proposal(
+    proposal_id: UUID, body: ProposalReject, ctx: IdempotentContext
 ) -> dict:
     return ctx.dispatch(body)
 

@@ -35,7 +35,7 @@ TOOLS = {
     },
     "create_slideshow": {
         "name": "create_slideshow",
-        "description": "Build a slide deck and save it in the workspace. Put each slide's title on a line starting with '# '. Under it, use '- ' for bullet points (at most 4 short ones), '> ' for one big lead statement, 'stat: 38% | label' for up to 3 headline numbers, and 'notes: ' for speaker notes. Optional theme: aurora, paper, sunrise or mono. Does not publish or send anything.",
+        "description": "Build a slide deck and save it in the workspace. Put each slide's title on a line starting with '# '. Under it, use '- ' for bullet points (at most 4 short ones), '> ' for one big lead statement, 'stat: 38% | label' for up to 3 headline numbers, 'quote: words | who said it' for a pull quote, numbered lines ('1. Do this') for a sequence of steps, and 'notes: ' for speaker notes. A title with nothing under it becomes a section divider. Optional theme: aurora, paper, sunrise, mono, ocean or dusk. Does not publish or send anything.",
         "risk": "local_write",
         "inputSchema": {
             "type": "object",
@@ -142,9 +142,10 @@ SKILLS = {
         "Make each slide's title its takeaway as a short sentence ('Onboarding drops from 14 days to 5'), never a bare label ('Onboarding').\n"
         "Keep every slide to one idea: at most 4 bullets, each under 12 words, parallel wording, no trailing periods.\n"
         "Vary the layout. Use '> ' for a single big statement, 'stat: 38% | faster onboarding' lines (up to 3) when you have real numbers, and bullets only for true lists.\n"
+        "Make it feel designed: in a deck of 7 or more slides, put a title-only slide (a section divider) between the main parts. Use 'quote: the words | who said them' only for a real quote the user gave you. Use numbered lines ('1. Gather notes') when order matters, so they show as steps. Five or more bullets split into two columns, but prefer four or fewer.\n"
         "Use only numbers the user gave you. If you have none, write a statement slide instead of inventing a statistic.\n"
         "End with a next-steps slide that names an owner or a date when the user supplied one. Add 'notes: ' lines saying what to say out loud.\n"
-        "Pick a theme: aurora (dark, default), paper (light, formal), sunrise (warm, for pitches) or mono (stark, technical)."
+        "Pick a theme to fit the room: aurora (dark, default), paper (light, formal), sunrise (warm, for pitches), mono (stark, technical), ocean (calm teal, for research and health) or dusk (soft violet, for creative and product work). Use one theme for the whole deck."
     ),
     "write-document": (
         "Open with the answer: two sentences under the title that say what the reader should know or decide.\n"
@@ -562,8 +563,8 @@ def validate(c, app, actor, cap_id, data):
         require(all(t in GITHUB_TOOLS for t in cap["tools"]) and conn["kind"] == "github_mcp",
                 "GitHub reading needs its own GitHub connection.", 409, "connection_denied")
         require(conn.get("credential_version") == digest(app.github.token),
-                "GitHub configuration changed. Reconnect it from Library.", 409, "connection_denied")
-        require(bool(conn.get("validated_at")), "Test the GitHub connection from Library first.", 409, "validation_required")
+                "The GitHub connection was changed. Ask an admin to prepare it again.", 409, "connection_denied")
+        require(bool(conn.get("validated_at")), "GitHub is not prepared yet. Ask an admin to run the GitHub preparation step first.", 409, "validation_required")
         result = put(c, "validations", {
             "id": uid(), "org_id": actor["org_id"], "capability_id": cap_id,
             "capability_version": cap["version"], "connection_id": conn_id,

@@ -323,9 +323,6 @@ body.dragging .halo{animation-duration:1.6s}
 .checks{display:flex;flex-wrap:wrap;gap:8px}
 .checks label{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:13.5px;background:rgba(255,255,255,.04);border-radius:999px;cursor:pointer}
 .checks input{height:auto;accent-color:var(--ice)}
-.job{display:flex;flex-direction:column;gap:12px;padding:22px 0;box-shadow:0 -1px 0 var(--line)}
-.job-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
-.job h2{font-size:19px;margin-top:4px}
 .state{font-size:13px;color:var(--dim);white-space:nowrap}
 .state.accepted,.state.completed{color:var(--ok)}.state.awaiting_approval,.state.needs_correction{color:var(--warn)}.state.failed{color:var(--bad)}.state.running,.state.queued{color:var(--ice)}
 
@@ -538,3 +535,157 @@ body.dragging .halo{animation-duration:1.6s}
 .agent-menu>.menu-pop button{width:100%;text-align:left;white-space:normal}
 
 .agent-owner-group{margin-bottom:10px}.agent-owner-label{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px 6px;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--ice)}.agent-owner-label>span{color:var(--faint);font-size:11px;font-weight:400}.agent-owner-list{margin:0;padding:0;list-style:none}.agent-team-heading{padding:14px 12px 4px;border-top:1px solid var(--line);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.failed{display:flex;flex-direction:column;gap:6px}
+.failed .err{margin:0}
+.failed .note{margin:0;line-height:1.5}
+.failed .row{margin-top:4px}
+.warn-note{color:#ffc073;text-align:center;max-width:520px;margin:12px auto 0}
+
+/* ======================================================================
+   Review pass: layout, legibility, touch targets. Kept last so it wins.
+   ====================================================================== */
+:root{--faint:#7b88a3}
+.note.prompt{margin:6px 0 0;white-space:pre-wrap}
+
+/* Create: one screen on desktop (tools left, instructions right), stacked below that. */
+.ask-pane{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:640px}
+.ask-pane .ask-box{margin-top:28px}
+.ask-pane>.note{margin:0}
+.tool-caption{min-height:2.9em;max-width:520px;margin:0;font-size:13.5px;line-height:1.45;color:var(--dim);text-align:center}
+.why{min-height:1.4em;margin:0;font-size:13px;color:var(--warn);text-align:center}
+.note.kbd{margin:-6px 0 0;text-align:left;font-size:12.5px}
+@media (min-width:1100px) and (min-height:620px){
+  .forge-screen{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,540px);column-gap:56px;align-items:start;max-width:1120px;padding-top:5vh;text-align:left}
+  .forge-screen>.display,.forge-screen>.lede{grid-column:1/-1;margin-left:auto;margin-right:auto;text-align:center}
+  .forge-screen .forge{grid-column:1;margin-top:8px;gap:16px}
+  .forge-screen .ask-pane{grid-column:2;align-items:stretch;max-width:none;margin-top:8px}
+  .forge-screen .ask-pane .ask-box{margin-top:0}
+  .forge-screen .ask-pane .ask-row{justify-content:flex-start}
+  .forge-screen .ask-pane .why,.forge-screen .ask-pane .note{text-align:left}
+  .forge-screen.teach .ask-pane{align-self:center}
+  .forge-screen.teach .ask-pane .ask-row{justify-content:flex-start}
+}
+@media (max-height:780px){.core-zone{--r:128px;width:320px}}
+@media (max-width:620px){.core-zone{--r:106px;width:272px}}
+/* Controls sit on a solid panel so the horizon never strikes through what you type. */
+.ask-box textarea#forge-text{background:rgba(9,14,28,.92)}
+.ask-box textarea#forge-text:focus{background:rgba(12,18,34,.97)}
+.starter{position:relative;background:rgba(12,18,34,.84)}
+.starter[aria-pressed=true]{border-color:rgba(191,239,255,.55);background:rgba(191,239,255,.1)}
+.starter[aria-pressed=true]::after{content:"";position:absolute;top:14px;right:14px;width:8px;height:8px;border-radius:50%;background:var(--ice);box-shadow:0 0 10px var(--ice)}
+@media (max-width:560px){
+  .starter-grid{display:flex;gap:10px;margin:0 -16px;padding:0 16px 6px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none}
+  .starter-grid::-webkit-scrollbar{display:none}
+  .starter{flex:0 0 74%;scroll-snap-align:start}
+}
+/* Drag and drop: a grip on tools you can drag, and the belt becomes the "put it back" target. */
+.tool{touch-action:manipulation}
+@media (pointer:fine){
+  .tool:not(.ghost)::before{content:"";flex:none;width:6px;height:14px;margin-right:-2px;opacity:.4;background:radial-gradient(circle,currentColor 1.1px,transparent 1.5px) 0 0/6px 5px}
+}
+.belt{min-height:52px;padding:2px;border-radius:26px;outline:1px dashed transparent;outline-offset:8px;transition:outline-color .2s ease,background-color .2s ease}
+body.dragging-out .belt{outline-color:rgba(255,128,144,.55);background:rgba(255,128,144,.05)}
+.belt.over{outline-color:var(--bad);background:rgba(255,128,144,.1)}
+.dd.flip .menu-pop.dd-pop{top:auto;bottom:48px;transform-origin:bottom left}
+
+/* Chat */
+.chat-top>.row{gap:6px}
+.earlier{margin:0 0 8px}
+.thread.older{margin-top:6px;padding-bottom:14px;opacity:.72}
+.box-row>.row{min-width:0;gap:8px}
+.kbd-hint{display:none;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.composer .box:focus-within .kbd-hint{display:inline}
+.icon-only.attach{width:32px;height:32px;color:var(--dim)}
+.doc footer .actions{display:inline-flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 18px}
+.slides figcaption .link-btn,.doc footer .link-btn,.result-actions .link-btn{display:inline-flex;align-items:center;gap:6px}
+.result-actions{margin:-6px 0 0}
+.link-btn{padding:5px 0}
+.icon-only{width:34px;height:34px}
+.rate{gap:0}
+
+/* Slides: visible arrows, roomy dots, keyboard focus, no clipped text on phones. */
+.stage{padding-bottom:calc(clamp(20px,6%,58px) + 22px)}
+.stage .nav{width:44px;height:44px;opacity:.6}
+.stage:hover .nav:not(:disabled),.stage .nav:focus-visible{opacity:1}
+.stage .nav:disabled{opacity:0;pointer-events:none}
+.stage:focus-visible{outline:2px solid rgba(191,239,255,.6);outline-offset:3px;border-radius:18px}
+.dots-nav{gap:0}
+.dots-nav button{position:relative;width:24px;height:24px;background:none}
+.dots-nav button::before{content:"";position:absolute;inset:8px;border-radius:50%;background:var(--line-2);transition:background-color .2s ease,transform .2s ease}
+.dots-nav button[aria-current=true]{background:none;transform:none}
+.dots-nav button[aria-current=true]::before{background:var(--ice);transform:scale(1.35)}
+@media (max-width:620px){.stage{aspect-ratio:auto;min-height:230px}}
+
+/* Pages */
+.lines.files>li{grid-template-columns:auto minmax(0,1fr) auto}
+.lines .meta{font-size:12.5px}
+.lines>li.proposal{align-items:start}
+.proposal .quiet{margin-top:4px}
+.field{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.field .label{font-size:13.5px;color:var(--dim)}
+.add-library-tool .menu.dd>summary{height:40px}
+.add-library-tool .menu-pop.dd-pop{top:46px}
+.employee-chevron{display:grid;place-items:center}
+.employee-chevron .ic{width:20px;height:20px}
+.employees-nav .ic{color:var(--ice)}
+.pw{position:relative}
+.pw input{padding-right:76px}
+.pw-toggle{position:absolute;right:10px;top:26px;transform:translateY(-50%);padding:6px 10px;font:inherit;font-size:13px;color:var(--ice);background:none;border:0;border-radius:8px;cursor:pointer}
+#password-login .btn .ic{width:20px;height:20px}
+
+/* Phones and tablets: finger-sized targets, and a menu button that never blends into content. */
+@media (max-width:900px){.menu-btn{background:rgba(8,12,24,.95);box-shadow:0 6px 20px rgba(0,0,0,.5)}}
+@media (pointer:coarse){
+  .icon-only{width:44px;height:44px}
+  .icon-only.attach{width:44px;height:44px}
+  .link-btn,details.quiet>summary{min-height:44px;display:inline-flex;align-items:center}
+  .btn.small{height:44px}
+  .tool{height:44px}
+  .side-list a{padding:11px 12px}
+  .agent-nav-row{grid-template-columns:minmax(0,1fr) 44px}
+  .agent-menu>summary{width:44px;height:44px}
+  .menu-pop button,.menu-pop a{padding:13px 12px}
+  .dots-nav button{width:36px;height:36px}
+  .dots-nav button::before{inset:14px}
+  .kbd-hint{display:none!important}
+  .switch{min-height:44px}
+}
+
+/* second review pass */
+@media (max-width:560px){.starter-grid{scroll-padding:0 16px}}
+@media (min-width:1100px) and (min-height:620px){
+  .forge-screen .ask-pane{padding:24px;border-radius:26px;background:rgba(7,11,24,.88);box-shadow:inset 0 0 0 1px var(--line),0 30px 80px -40px rgba(0,0,0,.9);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+}
+/* the strip behind the chat box spans the page, not just the column */
+.composer{background:none}
+.composer::before{content:"";position:absolute;left:-60vw;right:-60vw;top:0;bottom:0;z-index:-1;pointer-events:none;background:linear-gradient(transparent,rgba(2,4,10,.88) 45%)}
+.menu-pop.dd-pop{background:rgb(14,20,36)}
+main{overflow-x:clip}
+
+/* ---- GitHub prepare card (admins) ---- */
+.gh-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin: 0 0 18px; padding: 14px 16px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; background: rgba(7,11,24,.88); }
+.gh-card .gh-text { display: flex; align-items: flex-start; gap: 10px; flex: 1 1 100%; line-height: 1.45; }
+.gh-card .gh-text .ic { flex: none; margin-top: 2px; }
+.gh-card .gh-field { display: grid; gap: 6px; flex: 1 1 240px; max-width: 460px; }
+.gh-note { margin: 0 0 12px; }
+
+/* Slide layouts: section, quote, steps, split; themes ocean and dusk */
+.stage.t-ocean{--bg1:rgba(94,224,208,.22);--bg2:#06232b;--bg3:#021015;--fg:#e9fbff;--sub:#a9cfd6;--accent:#5ee0d0;--faintfg:#6f9aa3}
+.stage.t-dusk{--bg1:rgba(201,167,255,.24);--bg2:#1b1530;--bg3:#0a0814;--fg:#f3eefc;--sub:#cbbfe6;--accent:#c9a7ff;--faintfg:#8c80a8}
+.stage h3::after{content:"";display:block;width:34px;height:2px;margin-top:12px;background:var(--accent);border-radius:2px}
+.stage.l-cover h3::after,.stage.l-section h3::after,.stage.l-statement h3::after,.stage.l-quote h3::after{display:none}
+.stage.l-cover::before,.stage.l-section::before{content:"";position:absolute;right:-12%;top:50%;width:62%;aspect-ratio:1;transform:translateY(-50%);border-radius:50%;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);box-shadow:0 0 0 clamp(18px,4vw,44px) color-mix(in srgb,var(--accent) 6%,transparent);pointer-events:none}
+.stage.l-section{align-items:flex-start;justify-content:center}
+.stage.l-section h3{max-width:14ch;font-size:clamp(1.5rem,4.4vw,3rem);font-weight:600;text-wrap:balance}
+.stage.l-section .lead{color:var(--accent)}
+.stage.l-quote{justify-content:center}
+.stage.l-quote h3{font-size:clamp(.75rem,1.3vw,.9rem);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.stage blockquote{margin:0;max-width:26ch;display:flex;flex-direction:column;gap:14px}
+.stage blockquote p{margin:0;font-family:var(--display);font-size:clamp(1.2rem,3.6vw,2.4rem);line-height:1.15;letter-spacing:-.03em;color:var(--fg);text-wrap:balance}
+.stage blockquote cite{font-style:normal;font-size:clamp(.78rem,1.4vw,.95rem);color:var(--accent)}
+.stage ol.steps{margin:0;padding:0;list-style:none;counter-reset:step;display:flex;flex-direction:column;gap:clamp(8px,1.6vw,14px);font-size:clamp(.85rem,1.7vw,1.1rem);color:var(--sub)}
+.stage ol.steps li{counter-increment:step;display:flex;align-items:baseline;gap:14px}
+.stage ol.steps li::before{content:counter(step);flex:none;width:1.9em;height:1.9em;margin:0;display:grid;place-items:center;border-radius:50%;background:color-mix(in srgb,var(--accent) 16%,transparent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent);font-size:.85em;font-variant-numeric:tabular-nums;transform:translateY(.1em)}
+.stage.l-split ul{display:grid;grid-template-columns:1fr 1fr;gap:9px clamp(18px,4%,40px)}
+.stage .stats div+div{padding-left:clamp(14px,4%,44px);border-left:1px solid color-mix(in srgb,var(--fg) 14%,transparent)}
+@media (max-width:620px){.stage.l-split ul{grid-template-columns:1fr}.stage.l-cover::before,.stage.l-section::before{opacity:.5}.stage .stats div+div{padding-left:0;border-left:0}}

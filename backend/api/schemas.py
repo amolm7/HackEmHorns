@@ -90,6 +90,10 @@ class ProposalConfirm(Input):
     revision: Annotated[int, Field(ge=1)]
 
 
+class ProposalReject(Input):
+    reason: Annotated[str, Field(max_length=300)] = ""
+
+
 class Binding(Input):
     capability_id: Text
     connection_id: Text
@@ -119,7 +123,7 @@ class AgentPatch(Input):
 class RunCreate(Input):
     task: LongText
     mode: Mode = "demo"
-    max_steps: Annotated[int, Field(ge=1, le=20)] = 8
+    max_steps: Annotated[int, Field(ge=1, le=20)] = 12
     follow_up_of: Text | None = None
     conversation_id: Text | None = None
     repository: Annotated[str, Field(min_length=1, max_length=300)] | None = None

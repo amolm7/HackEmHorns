@@ -1,9 +1,10 @@
+import threading
 import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from .contracts import *
 from .db import *
-from . import registry, recruiter, reviews, workqueue, integrations
+from . import registry, recruiter, reviews, integrations
 from .github import GitHubMCP
 from .runtime import Runtime, start, public_run, cancel, conversations
 from .runtime.mcp import MCP
@@ -68,6 +69,7 @@ class Application:
         self.github = GitHubMCP(self.config)
         self.mcp = MCP(self.db)
         self.runtime = Runtime(self)
+        self._local = threading.local()
         if worker:
             self.runtime.launch()
 
@@ -98,12 +100,16 @@ class Application:
         data = data or {}
         if method == "POST" and parsed.path == "/api/integrations/github/connect":
             return integrations.connect_github(self, user_id, data)
+        presetup = None
+        if method == "POST" and parsed.path == "/api/agents/quick-create" and isinstance(data, dict):
+            # Slow model call first, with no database lock held.
+            presetup = recruiter.pregenerate(self, user_id, data)
+        self._local.presetup = presetup
         with self.db.transaction(method != "GET") as c:
             actor = self.actor(c, user_id)
             require(isinstance(data, dict), "JSON body must be an object.")
             idem = method == "POST" and (
-                parts[1:2] == ["work-queue"]
-                or (
+                (
                     len(parts) >= 2
                     and parts[-1] in ["confirm", "install", "runs", "decision", "quick-create"]
                 )
@@ -173,8 +179,6 @@ class Application:
         path = "/".join(p[1:])
         if method == "GET" and path == "integrations/github":
             return integrations.github_status(c, self, actor)
-        if p[1:2] == ["work-queue"]:
-            return workqueue.route(c, self, actor, method, p, d)
         if method == "GET" and path == "me":
             return {
                 **actor,
@@ -306,8 +310,10 @@ class Application:
         if len(p) >= 4 and p[1:3] == ["recruiter", "proposals"]:
             if len(p) == 5 and p[4] == "confirm" and method == "POST":
                 return recruiter.confirm(c, actor, p[3], d)
+            if len(p) == 5 and p[4] == "reject" and method == "POST":
+                return recruiter.reject(c, actor, p[3], d)
         if path == "agents/quick-create" and method == "POST":
-            return recruiter.quick_create(c, self, actor, d)
+            return recruiter.quick_create(c, self, actor, d, getattr(self._local, "presetup", None))
         if path == "agents" and method == "GET":
             result = []
             for agent in all_rows(c, "agents"):

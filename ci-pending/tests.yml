@@ -1,0 +1,70 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]   # main is tested by deploy.yml, which deploys only if these pass
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit and contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      # Includes tests/test_registry_contract.py, which covers every registered tool automatically.
+      - run: python -m unittest discover -s tests -q
+      - run: node --check static/app.js
+      - run: node tests/test_frontend_contracts.js
+      - run: python -m pip_audit -r requirements.txt --progress-spinner off
+
+  smoke:
+    name: Boot server and exercise every tool
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/smoke.py
+
+  docker:
+    name: Image builds and starts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t orbit:ci .
+      - name: Container reaches ready
+        run: |
+          mkdir -p /tmp/orbit-data && sudo chown 10001:10001 /tmp/orbit-data
+          docker run -d --name orbit -p 8000:8000 -v /tmp/orbit-data:/app/data \
+            -e APP_ENV=development -e AUTH_MODE=development -e APP_ORIGIN=http://localhost:8000 \
+            orbit:ci uvicorn server:app --host 0.0.0.0 --port 8000
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/api/ready && exit 0
+            sleep 1
+          done
+          docker logs orbit
+          exit 1
+      - name: Container serves sign-up and a real hire
+        run: |
+          docker rm -f orbit
+          docker run -d --name orbit -p 8000:8000 \
+            -e APP_ENV=development -e AUTH_MODE=password -e ALLOW_SIGNUP=1 -e APP_ORIGIN=http://localhost:8000 \
+            orbit:ci uvicorn server:app --host 0.0.0.0 --port 8000
+          python scripts/smoke_live.py http://localhost:8000 --wait 60 || { docker logs orbit; exit 1; }

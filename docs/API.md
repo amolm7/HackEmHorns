@@ -4,7 +4,7 @@ Base URL: `http://localhost:8000/api`. Swagger UI: `/docs`. Machine-readable Ope
 
 ## Identity, errors and replay protection
 
-`AUTH_MODE=password` uses a server-side session cookie. POST `/auth/login` with username/password, GET `/auth/session` for a CSRF token, and include `X-CSRF-Token` on authenticated mutations. POST `/auth/logout` revokes the session. `X-Dev-User` is ignored in this mode. In development mode only, `X-Dev-User: pavan` selects a local test identity (default `pavan`). Production requires password mode and a configured HTTPS origin. See [operations](OPERATIONS.md). A `roles` or `level` field in a request cannot grant authority.
+`AUTH_MODE=password` uses a server-side session cookie. POST `/auth/login` with username/password, GET `/auth/session` for a CSRF token, and include `X-CSRF-Token` on authenticated mutations. POST `/auth/logout` revokes the session. `X-Dev-User` is ignored in this mode. In development mode only, `X-Dev-User: pavan` selects a local test identity (default `pavan`). Production requires password mode and a configured HTTPS origin. See [operations](OPERATIONS.md). A `roles` or `level` field in a request cannot grant authority. When `ALLOW_SIGNUP=1`, `GET /auth/config` reports `signup: true` and `POST /auth/signup` (`username`, `password`, optional `code` when `SIGNUP_CODE` is set) creates a self-service member, a manager and builder who approves their own hires and is never an admin, and signs them in. It is rate limited per client address and capped in total.
 
 Seed users: `amol` (admin/manager), `tarun` (manager), `shaun` (builder), `pavan` (manager/builder), `member`, `auditor`. The test-only other organization identity is disabled in the running app.
 
@@ -16,7 +16,7 @@ Error envelope:
 
 401 = sign-in required/expired, 429 = rate limited, 503 = not ready, 400 = invalid domain input, 403 = permission/access denied, 404 = absent/inaccessible resource, 409 = state/version/idempotency conflict, 413 = oversized body, 415 = content type, 422 = Pydantic validation failure or unsupported sandbox request, 502 = model/tool transport failure. Malformed JSON, invalid UUIDs/enums, extra fields, type coercion attempts, and missing required idempotency headers now return 422. Validation errors keep the error envelope and include field locations/messages without echoing input values. HTTP mutations return 200 with the resource; run execution continues asynchronously.
 
-Required `Idempotency-Key` header on proposal confirmation, marketplace install, run submission, approval decisions, task outcome recording, and all work-queue POST operations. The key is scoped to actor, org, operation and path. Same key/body returns the original result; same key/different body returns 409. Use a new UUID for a new operation, retain it for retries. Stored replay results are snapshots, so GET the resource for its current state.
+Required `Idempotency-Key` header on proposal confirmation, marketplace install, run submission, approval decisions, task outcome recording and quick-create. The key is scoped to actor, org, operation and path. Same key/body returns the original result; same key/different body returns 409. Use a new UUID for a new operation, retain it for retries. Stored replay results are snapshots, so GET the resource for its current state.
 
 ## Identity and configuration
 
@@ -57,8 +57,8 @@ No arbitrary endpoint/code registration. Risk is taken from the trusted implemen
 
 ### GitHub connection (pre-registered adapter)
 
-- `GET /integrations/github`: authenticated status with `configured`, `connected`, enabled `department_ids`, `capability_id`, and `read_only`. Never returns credentials.
-- `POST /integrations/github/connect`: admin only; body `{"repository":"owner/repo","department_id":"support"}`. Uses server-side `GITHUB_PERSONAL_ACCESS_TOKEN`, discovers GitHub MCP read tools and reads the repository root before saving anything. Creates or updates the organization's prepared connection only; it never publishes a Library tool. Repeated preparation keeps one connection. The setup repository is a test target, not a fixed scope for future tasks.
+- `GET /integrations/github`: authenticated status with `configured` (a server token is set), `connected` (an admin prepared the connector), enabled `department_ids`, `capability_id`, and `read_only`. Never returns credentials.
+- `POST /integrations/github/connect`: admin only; body `{"repository":"owner/repo","department_id":"support"}`. Uses server-side `GITHUB_PERSONAL_ACCESS_TOKEN`, discovers GitHub MCP read tools and reads the repository root before saving anything. Creates or updates the organization's prepared connection only; it also adds the default Read GitHub repositories tool to the Library if none exists. Repeated preparation keeps one connection. The setup repository is a test target, not a fixed scope for future tasks.
 - `POST /capabilities`: a manager or admin publishes a named GitHub tool with `{"name":"Repository Reader","description":"Explain the code and issues","source":"github","department_id":"support"}` and an `Idempotency-Key`. Requires an already-tested connection for that department; uses the registered read actions automatically. The description is stored in the skill playbook and supplied to agents. A retry with the same key returns the same tool; a new creation can produce another named tool. Existing workspace bundles retain their `tools` list and default `source=bundle`.
 - `POST /agents/{id}/runs`: accepts optional `repository` (owner/repo or an HTTPS github.com repository URL). Required for agents with GitHub reading, unless continuing a conversation with an existing repository. Such agents require a live model. Changing repositories inside an existing conversation returns 409 `repository_changed`; start a new conversation instead.
 - Tools: `github_read_file` takes `path`; `github_list_issues` takes `state` (`OPEN` or `CLOSED`). The backend supplies the user-selected repository; the model cannot substitute a repository in tool arguments. Read results include `source: github_mcp`, `repository`, source URL, text, truncation flag, and scope.
@@ -85,6 +85,7 @@ Binding object used throughout:
 | --- | --- | --- |
 | GET | `/recruiter/proposals` | Proposals visible to creator, assigned manager, or admin |
 | POST | `/recruiter/proposals/{id}/confirm` | Assigned manager/admin confirms exact revision; idempotency required |
+| POST | `/recruiter/proposals/{id}/reject` | Assigned manager/admin declines a waiting request, or its asker withdraws it. Body `{ "reason": "" }` (optional, max 300). A rejected request can no longer be confirmed (`proposal_rejected`); only waiting requests can be rejected (`proposal_not_waiting`). Idempotency required |
 
 Message example:
 
@@ -148,6 +149,10 @@ Run request:
 
 Run state: `queued`, `running`, `awaiting_approval`, `completed`, `failed`, `cancelled`. `max_steps` is an integer 1–20 and limits executed tool calls. Live model turns are separately bounded. Poll GET for asynchronous progress. Only allowed tools can be requested; every action uses a server-resolved connection.
 
+**Failures end the task, not the agent.** A `failed` or `cancelled` run never blocks its conversation: the next `POST /agents/{id}/runs` with the same `conversation_id` starts a fresh turn (without replaying the broken one). Only a task that is still queued, running or waiting returns 409 `task_in_progress`. `max_steps` defaults to 12. For a live model the server reserves tool calls for the deliverable a task asks for (slides, document, email draft, meeting invite, task list): extra reads beyond that are answered with `budget_reserved` so the model saves instead of exploring, and a run that claims a deliverable without an executed save action is repaired once, then fails with `deliverable_missing`.
+
+Useful run `error_code` values: `step_limit`, `deliverable_missing`, `retry_exhausted`, `provider_error`, `provider_timeout`, `github_error`, `github_not_configured`, `github_requires_live_model`, `connection_denied`, `repository_changed`, `token_budget`, `history_too_long`, `stale_spec`, `internal_error`. GitHub reading is only allowed on agents created with a live model (Meta or Gemini).
+
 Cancellation blocks future actions; it cannot undo work already performed. An in-flight tool call returns a conflict until the local operation finishes. No public endpoint can directly resume an unapproved action.
 
 Outcome request: `{ "success": true, "comment": "Checked the reply against the incident guide." }`. One immutable outcome per run. Completion means execution finished, not that a manager judged the task correct.
@@ -204,18 +209,6 @@ All new mutation requests below use the configured session authentication (or `X
 `POST /agents/{id}/runs` additionally accepts `conversation_id`. It continues the latest completed turn in a live conversation, rejects parallel/stale/cross-user or cross-agent continuation, and requires the same model. A new conversation is needed after an unfinished task or to switch models. Legacy `follow_up_of` remains supported. Public runs include `conversation_id` and compatible `thread_id`.
 
 Completed demo runs now include a persisted `result.answer`. New approval actions include `summary` in their immutable hash; old action records retain their existing hash format. Rename remains the existing versioned `PATCH /agents/{id}` operation, including its asks-first reset and pending-run invalidation behavior.
-
-## Work queue and quality
-
-`GET /work-queue` lists actor-visible jobs. `POST /work-queue` accepts `workflow` (`launch`, `analysis`, `brief`), `title`, `task`, optional `department_id`, and optional `acceptance`:
-
-```json
-{"workflow":"launch","title":"Campus launch","task":"Prepare the package.\nchannel,signups\nAmbassadors,180\nSocial,240","acceptance":{"slide_count":5,"required_sections":["Recommendation","Risks","Next steps"],"min_document_words":40}}
-```
-
-Analysis workflows require a CSV source in the brief. `POST /work-queue/sample-batch` loads labeled fictional input for a workflow. `POST /work-queue/{id}/assign` accepts `agent_id` and `mode`. `POST /work-queue/{id}/review` accepts `success` and `comment`; passing automated checks is necessary but not sufficient for manager acceptance. IDs here can also be stable seeded IDs, not just UUIDs.
-
-Job results include `quality` (`passed`, individual checks, limits), artifacts, ownership, outcome and timestamps. A final run with missing/invalid deliverables gets `error_code=deliverable_validation` after at most one live repair attempt. Retryable provider errors preserve `retry_count` and `next_attempt_at`; exhaustion produces `error_code=retry_exhausted`. Rerun corrected/failed jobs through assignment; prior attempt IDs and deliverables remain available.
 
 `GET /auth/config` is public and exposes only the authentication mode. `/health` and `/ready` are public liveness/readiness probes. Readiness is not an assertion of deployment security.
 

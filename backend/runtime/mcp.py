@@ -28,13 +28,17 @@ WRITE_TOOLS = {"create_draft", "create_slideshow", "create_document", "schedule_
 MAX_PAGE_BYTES = 400_000
 
 
-THEMES = ("aurora", "paper", "sunrise", "mono")
+THEMES = ("aurora", "paper", "sunrise", "mono", "ocean", "dusk")
 STAT = re.compile(r"^stat\s*:\s*(.+?)\s*\|\s*(.+)$", re.I)
+QUOTE = re.compile(r"^quote\s*:\s*(.+?)(?:\s*\|\s*(.+))?$", re.I)
+STEP = re.compile(r"^\d{1,2}[.)]\s+(\S.*)$")
 
 
 def parse_outline(text):
     """Slides from a plain outline. '# ' starts a slide; '- ' adds a bullet; '> ' sets the lead
-    statement; 'stat: 38% | label' adds a headline number; 'notes: ' adds speaker notes."""
+    statement; 'stat: 38% | label' adds a headline number; 'quote: words | who' adds a pull quote;
+    '1. step' lines make a numbered sequence; 'notes: ' adds speaker notes. A title with nothing
+    under it becomes a section divider."""
     slides, current = [], None
     for line in text.splitlines():
         line = line.strip()
@@ -59,15 +63,26 @@ def parse_outline(text):
             value, label = STAT.match(line).groups()
             if len(current.setdefault("stats", [])) < 3:
                 current["stats"].append({"value": value.strip()[:16], "label": label.strip()[:60]})
+        elif QUOTE.match(line):
+            text, by = QUOTE.match(line).groups()
+            current["quote"] = {"text": text.strip()[:240], "by": (by or "").strip()[:80]}
         else:
-            bullet = line.lstrip("-*\u2022 ").strip()[:300]
+            step = STEP.match(line)
+            if step:
+                current["ordered"] = True
+            bullet = (step.group(1) if step else line.lstrip("-*\u2022 ")).strip()[:300]
             if bullet and len(current["bullets"]) < 8:
                 current["bullets"].append(bullet)
     for index, slide in enumerate(slides):
+        plain = not slide["bullets"] and not slide.get("stats") and not slide.get("quote")
         slide["layout"] = (
-            "cover" if index == 0 and not slide["bullets"] and not slide.get("stats")
+            "cover" if index == 0 and plain
             else "stats" if slide.get("stats")
+            else "quote" if slide.get("quote") and not slide["bullets"]
             else "statement" if slide.get("lead") and not slide["bullets"]
+            else "section" if plain and not slide.get("lead")
+            else "steps" if slide.get("ordered") and slide["bullets"]
+            else "split" if len(slide["bullets"]) >= 5
             else "list"
         )
     return slides[:30]

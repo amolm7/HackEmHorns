@@ -223,10 +223,10 @@ class BackendNotesTests(unittest.TestCase):
     def test_live_conversation_auto_continues_and_rejects_parallel_messages(self):
         agent = self.quick(model_profile_id="meta")
         conv = self.post(f'agents/{agent["id"]}/conversations', {}).json()
-        first = self.task_run(agent, conversation_id=conv["id"], mode="meta")
+        first = self.task_run(agent, conversation_id=conv["id"], mode="meta", task="Say that you are ready")
         with patch("backend.runtime.model.generate", return_value=({"parts": [{"text": "Ready"}]}, {})):
             self.finish()
-        second = self.task_run(agent, conversation_id=conv["id"], mode="meta")
+        second = self.task_run(agent, conversation_id=conv["id"], mode="meta", task="Say it again")
         with self.app.db.transaction() as c:
             stored = get(c, "runs", second["id"])
         self.assertEqual(len(stored["contents"]), 3)
