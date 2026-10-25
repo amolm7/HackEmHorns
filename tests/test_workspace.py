@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from tests.recruit import propose
 from backend.app import Application
 from backend.contracts import Error
 from backend.db import Database, all_rows, get, put
@@ -33,7 +34,6 @@ class WorkspaceTests(unittest.TestCase):
         return self.app.handle(method, "/api/" + path, data, user, key)
 
     def hire(self, message, caps=None, **extra):
-        conv = self.call("POST", "recruiter/conversations", {})
         data = {
             "message": message,
             "department_id": "support",
@@ -42,9 +42,7 @@ class WorkspaceTests(unittest.TestCase):
         }
         if caps is not None:
             data["capability_ids"] = caps
-        p = self.call("POST", f"recruiter/conversations/{conv['id']}/messages", data)[
-            "proposal"
-        ]
+        p = propose(self.app, data)[1]["proposal"]
         agent = self.call(
             "POST",
             f"recruiter/proposals/{p['id']}/confirm",

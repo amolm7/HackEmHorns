@@ -13,6 +13,7 @@ from backend.db import get, put, all_rows
 from backend.runtime import model
 from backend.api.application import create_app
 from fastapi.testclient import TestClient
+from tests.recruit import propose
 from tests.test_workspace import use_model
 
 
@@ -36,13 +37,10 @@ class BackendTests(unittest.TestCase):
         message="Hire a support triage agent and draft replies",
         caps=None,
     ):
-        conv = self.call("POST", "recruiter/conversations", {}, user)
         data = {"message": message, "department_id": "support", "manager_id": manager}
         if caps is not None:
             data["capability_ids"] = caps
-        return self.call(
-            "POST", f'recruiter/conversations/{conv["id"]}/messages', data, user
-        )["proposal"]
+        return propose(self.app, data, user)[1]["proposal"]
 
     def hire(self, **kwargs):
         p = self.proposal(**kwargs)
@@ -131,22 +129,18 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(a["status"], "active")
 
     def test_missing_fields_and_stale_proposal(self):
-        conv = self.call("POST", "recruiter/conversations", {})
-        first = self.call(
-            "POST",
-            f'recruiter/conversations/{conv["id"]}/messages',
-            {"message": "Hire support help"},
-        )["proposal"]
+        conv_id, result = propose(self.app, {"message": "Hire support help"})
+        first = result["proposal"]
         self.assertIn("manager_id", first["missing_fields"])
-        latest = self.call(
-            "POST",
-            f'recruiter/conversations/{conv["id"]}/messages',
+        latest = propose(
+            self.app,
             {
                 "message": "Use Support with Pavan",
                 "department_id": "support",
                 "manager_id": "pavan",
             },
-        )["proposal"]
+            conversation_id=conv_id,
+        )[1]["proposal"]
         self.assertEqual(latest["revision"], 2)
         with self.assertRaises(Error) as e:
             self.call(
@@ -158,19 +152,10 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(e.exception.code, "stale_proposal")
 
     def test_unsupported_connector_and_model_configuration(self):
-        conv = self.call("POST", "recruiter/conversations", {})
         with self.assertRaises(Error):
-            self.call(
-                "POST",
-                f'recruiter/conversations/{conv["id"]}/messages',
-                {"message": "Connect GitHub"},
-            )
+            propose(self.app, {"message": "Connect GitHub"})
         with self.assertRaises(Error):
-            self.call(
-                "POST",
-                f'recruiter/conversations/{conv["id"]}/messages',
-                {"message": "Hire support", "mode": "gemini"},
-            )
+            propose(self.app, {"message": "Hire support", "mode": "gemini"})
 
     def test_intern_has_zero_tool_calls_before_review(self):
         a = self.hire()
@@ -527,16 +512,14 @@ class BackendTests(unittest.TestCase):
 
     def test_capability_recruiter_attaches_only_after_confirmation(self):
         a = self.hire(message="Search support tickets", caps=["ticket-search"])
-        conv = self.call("POST", "recruiter/conversations", {})
-        p = self.call(
-            "POST",
-            f'recruiter/conversations/{conv["id"]}/messages',
+        p = propose(
+            self.app,
             {
                 "message": "Add help documents",
                 "target_agent_id": a["id"],
                 "capability_ids": ["help-docs"],
             },
-        )["proposal"]
+        )[1]["proposal"]
         self.assertEqual(len(self.call("GET", f'agents/{a["id"]}')["bindings"]), 1)
         new = self.call(
             "POST",
@@ -566,7 +549,7 @@ class BackendTests(unittest.TestCase):
                 ("{}", {"Content-Type": "text/plain"}, 415),
             ]:
                 response = client.post(
-                    "/api/recruiter/conversations", content=body, headers=headers
+                    "/api/agents/quick-create", content=body, headers=headers
                 )
                 self.assertEqual(response.status_code, status)
                 self.assertIn("code", response.json()["error"])

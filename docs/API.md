@@ -40,7 +40,6 @@ Sandbox connection `support-local` permits Support only. Creating a new departme
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/capabilities` | Company catalog and server-controlled risk/schema metadata |
-| GET | `/capabilities/{id}` | Approved capability details |
 | POST | `/capabilities` | Admin; register a curated recipe using supported sandbox tools |
 | POST | `/capabilities/{id}/validate` | Admin/manager/builder; test the authorized local binding |
 
@@ -74,11 +73,7 @@ Binding object used throughout:
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| POST | `/recruiter/conversations` | Admin/manager/builder; body `{}` |
-| GET | `/recruiter/conversations/{id}` | Conversation owner reads messages |
-| POST | `/recruiter/conversations/{id}/messages` | Owner submits a setup request or updates the current draft |
 | GET | `/recruiter/proposals` | Proposals visible to creator, assigned manager, or admin |
-| GET | `/recruiter/proposals/{id}` | Exact review-card revision, missing fields, validation references |
 | POST | `/recruiter/proposals/{id}/confirm` | Assigned manager/admin confirms exact revision; idempotency required |
 
 Message example:
@@ -152,7 +147,6 @@ Outcome request: `{ "success": true, "comment": "Checked the reply against the i
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/approvals` | Manager's assigned Inbox; admin/auditor can inspect org reviews; optional `status` |
-| GET | `/approvals/{id}` | Immutable action snapshot, policy decision and prior tool evidence |
 | POST | `/approvals/{id}/decision` | Assigned manager/admin decides; idempotency required |
 
 Decision request:

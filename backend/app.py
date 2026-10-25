@@ -174,8 +174,6 @@ class Application:
             if method == "POST":
                 return registry.register(c, actor, d)
         if len(p) >= 3 and p[1] == "capabilities":
-            if len(p) == 3 and method == "GET":
-                return registry.capability(c, actor, p[2])
             if len(p) == 4 and p[3] == "validate" and method == "POST":
                 return registry.validate(c, self, actor, p[2], d)
         if path == "connections" and method == "GET":
@@ -238,29 +236,7 @@ class Application:
                 except Error:
                     pass
             return result
-        if path == "recruiter/conversations" and method == "POST":
-            return recruiter.conversation(c, actor)
-        if len(p) == 4 and p[1:3] == ["recruiter", "conversations"] and method == "GET":
-            conv = get(c, "conversations", p[3])
-            in_org(actor, conv)
-            require(
-                conv["actor_id"] == actor["id"],
-                "Conversation belongs to another actor.",
-                403,
-            )
-            return conv
-        if (
-            len(p) == 5
-            and p[1:3] == ["recruiter", "conversations"]
-            and p[4] == "messages"
-            and method == "POST"
-        ):
-            return recruiter.message(c, self, actor, p[3], d)
         if len(p) >= 4 and p[1:3] == ["recruiter", "proposals"]:
-            if len(p) == 4 and method == "GET":
-                proposal = get(c, "proposals", p[3])
-                recruiter.proposal_access(actor, proposal)
-                return proposal
             if len(p) == 5 and p[4] == "confirm" and method == "POST":
                 return recruiter.confirm(c, actor, p[3], d)
         if path == "agents/quick-create" and method == "POST":
@@ -368,8 +344,6 @@ class Application:
         if path == "approvals" and method == "GET":
             return reviews.inbox(c, actor, q.get("status"))
         if len(p) >= 3 and p[1] == "approvals":
-            if len(p) == 3 and method == "GET":
-                return reviews.detail(c, actor, p[2])
             if len(p) == 4 and p[3] == "decision" and method == "POST":
                 return reviews.decide(c, actor, p[2], d)
         if path == "employees" and method == "GET":
