@@ -100,7 +100,7 @@ References: [Meta tool calling](https://dev.meta.ai/docs/tool-calling), [Meta st
 
 ## Workspace capabilities and design (latest)
 
-- Preloaded capabilities: **Make a slideshow**, **Write a document**, **Analyze data**, **Research & summarize** (plus the labeled support sandbox). Saving tools use risk `local_write`: agents set to "Runs alone" may read and save locally; anything else (e.g. reply drafts) always asks.
+- Preloaded capabilities: **Make a slideshow**, **Write a document**, **Analyze data**, **Research & summarize**, **Schedule meetings**, **Draft emails**, **Plan tasks** (plus the labeled support sandbox). Saving tools use risk `local_write`: agents set to "Runs alone" may read and save locally; anything else (e.g. reply drafts) always asks.
 - Agent creation: choose a model, pick capabilities and/or describe the job, review, create. Agents start as "Asks first"; one switch moves them to "Runs alone". Follow-up questions continue a live conversation.
 - Leaderboard: result quality (thumbs up/down on results), approval rate, capability usage and creator usage.
 - `read_url` fetches only public http(s) pages (private/loopback addresses blocked, redirects re-checked). DNS-rebinding is not fully mitigated; do not expose this demo publicly.
@@ -121,3 +121,11 @@ Open **Team work** (the default home page). Choose **Product launch**, **Growth 
 Queue records and assignments persist in SQLite. Metrics show actual outcomes and execution turnaround, including time spent waiting for action review; they do not estimate hours saved. Sample intake is manual, with no email/CRM trigger or external routing integration. Routing labels are recommendations. API operations: `GET/POST /api/work-queue`, `POST /api/work-queue/sample-batch`, and per-item `/assign` and `/review`.
 
 The redesigned UI uses atomic quick creation, durable task conversations, authenticated activity updates, and soft archiving. See `docs/BACKEND-NOTES.md` for the completed backend handoff and remaining scope.
+
+### Skills (playbooks)
+
+Every capability carries a short **skill**: a playbook for doing that kind of work well (for example, slide titles that state a takeaway, at most four short bullets, real numbers only; meeting titles that name the outcome, with a timed agenda). Live models receive the playbooks for the tools they hold, appended to the agent's instructions at run time, so updates apply to existing agents. The Library and each agent's About panel show them. Playbooks are guidance only: permissions, approvals and validation are unchanged.
+
+- Slides accept `> ` lead statements, `stat: 38% | label` headline numbers, `notes: ` speaker notes, and a `theme` (aurora, paper, sunrise, mono). The viewer picks a layout (cover, statement, stats, list) per slide.
+- `schedule_meeting` saves an invite with attendees, time, agenda and a downloadable `.ics` file. It cannot see calendars and sends nothing. `draft_email` saves an unsent draft and always asks for approval. `create_task_list` saves tasks with optional owner and due date.
+- Demo mode reads obvious details from the request (emails, weekday or date, time, duration) and labels everything as a template.

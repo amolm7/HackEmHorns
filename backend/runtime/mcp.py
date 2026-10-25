@@ -15,6 +15,7 @@ import ssl
 import threading
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import certifi
@@ -23,11 +24,17 @@ from ..db import *
 from ..registry import TOOLS, TICKETS, DOCS
 
 # Tools that save something. They are idempotent per durable execution ID so crash recovery cannot save twice.
-WRITE_TOOLS = {"create_draft", "create_slideshow", "create_document"}
+WRITE_TOOLS = {"create_draft", "create_slideshow", "create_document", "schedule_meeting", "draft_email", "create_task_list"}
 MAX_PAGE_BYTES = 400_000
 
 
+THEMES = ("aurora", "paper", "sunrise", "mono")
+STAT = re.compile(r"^stat\s*:\s*(.+?)\s*\|\s*(.+)$", re.I)
+
+
 def parse_outline(text):
+    """Slides from a plain outline. '# ' starts a slide; '- ' adds a bullet; '> ' sets the lead
+    statement; 'stat: 38% | label' adds a headline number; 'notes: ' adds speaker notes."""
     slides, current = [], None
     for line in text.splitlines():
         line = line.strip()
@@ -39,14 +46,113 @@ def parse_outline(text):
                 "bullets": [],
             }
             slides.append(current)
+            continue
+        if current is None:
+            current = {"title": "Overview", "bullets": []}
+            slides.append(current)
+        if line.startswith(">"):
+            current["lead"] = line.lstrip("> ").strip()[:200]
+        elif line.lower().startswith("notes:"):
+            note = line[6:].strip()[:400]
+            current["notes"] = (current.get("notes", "") + " " + note).strip()[:600]
+        elif STAT.match(line):
+            value, label = STAT.match(line).groups()
+            if len(current.setdefault("stats", [])) < 3:
+                current["stats"].append({"value": value.strip()[:16], "label": label.strip()[:60]})
         else:
-            if current is None:
-                current = {"title": "Overview", "bullets": []}
-                slides.append(current)
             bullet = line.lstrip("-*\u2022 ").strip()[:300]
             if bullet and len(current["bullets"]) < 8:
                 current["bullets"].append(bullet)
+    for index, slide in enumerate(slides):
+        slide["layout"] = (
+            "cover" if index == 0 and not slide["bullets"] and not slide.get("stats")
+            else "stats" if slide.get("stats")
+            else "statement" if slide.get("lead") and not slide["bullets"]
+            else "list"
+        )
     return slides[:30]
+
+
+def clean_attendees(text):
+    people = []
+    for part in re.split(r"[,;\n]", text or ""):
+        part = part.strip()
+        if part and part.lower() not in [p.lower() for p in people]:
+            people.append(part[:120])
+    return people[:30]
+
+
+def ics_escape(value):
+    return str(value).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def meeting_result(args):
+    try:
+        start = datetime.fromisoformat(string(args.get("start"), "start", 40).strip().replace(" ", "T", 1))
+    except ValueError:
+        raise Error("Start must be a date and time such as 2026-11-03T14:00.", 422, "invalid_request")
+    raw = str(args.get("duration_minutes") or "30").strip()
+    require(raw.isdigit() and 5 <= int(raw) <= 480, "Duration must be a number of minutes from 5 to 480.", 422, "invalid_request")
+    minutes = int(raw)
+    end = start + timedelta(minutes=minutes)
+    title = string(args.get("title"), "title", 200)
+    attendees = clean_attendees(args.get("attendees"))
+    agenda = [x.strip().lstrip("-*\u2022 ").strip()[:200] for x in str(args.get("agenda") or "").splitlines() if x.strip()][:12]
+    location = str(args.get("location") or "").strip()[:500]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    uid_value = uid()
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ORBIT//Meeting draft//EN", "METHOD:PUBLISH", "BEGIN:VEVENT",
+        f"UID:{uid_value}@orbit.local", f"DTSTAMP:{stamp}",
+        # Floating local time: the invite carries no time zone because the user did not give one.
+        f"DTSTART:{start.strftime('%Y%m%dT%H%M%S')}", f"DTEND:{end.strftime('%Y%m%dT%H%M%S')}",
+        f"SUMMARY:{ics_escape(title)}",
+    ]
+    if agenda:
+        lines.append("DESCRIPTION:" + ics_escape("Agenda:\n" + "\n".join(f"- {x}" for x in agenda)))
+    if location:
+        lines.append(f"LOCATION:{ics_escape(location)}")
+    for person in attendees:
+        if "@" in person and " " not in person:
+            lines.append(f"ATTENDEE;RSVP=TRUE:mailto:{person}")
+    lines += ["END:VEVENT", "END:VCALENDAR"]
+    return {
+        "kind": "meeting",
+        "artifact_id": uid_value,
+        "title": title,
+        "start": start.isoformat(timespec="minutes"),
+        "end": end.isoformat(timespec="minutes"),
+        "duration_minutes": minutes,
+        "attendees": attendees,
+        "location": location,
+        "agenda": agenda,
+        "ics": "\r\n".join(lines) + "\r\n",
+        "sent": False,
+        "published": False,
+        "saved_at": now(),
+    }
+
+
+def task_list_result(args):
+    title = string(args.get("title"), "title", 200)
+    tasks = []
+    for line in str(args.get("tasks") or "").splitlines():
+        line = line.strip().lstrip("-*\u2022 ").strip()
+        line = re.sub(r"^\[[ xX]?\]\s*", "", line)
+        if not line:
+            continue
+        parts = [x.strip() for x in line.split("|")]
+        tasks.append({"text": parts[0][:200], "owner": (parts[1] if len(parts) > 1 else "")[:80], "due": (parts[2] if len(parts) > 2 else "")[:40]})
+    require(bool(tasks), "The task list needs at least one task.")
+    return {
+        "kind": "tasks",
+        "artifact_id": uid(),
+        "title": title,
+        "tasks": tasks[:40],
+        "task_count": len(tasks[:40]),
+        "published": False,
+        "saved_at": now(),
+    }
 
 
 def number(value):
@@ -410,13 +516,29 @@ def perform(db, name, args, execution_id):
                 title = string(args.get("title"), "title", 200)
                 slides = parse_outline(string(args.get("outline"), "outline", 4000))
                 require(bool(slides), "The outline needs at least one slide.")
+                theme = str(args.get("theme") or "aurora").strip().lower()
                 result = {
                     "kind": "slideshow",
                     "artifact_id": uid(),
                     "title": title,
+                    "theme": theme if theme in THEMES else "aurora",
                     "slides": slides,
                     "slide_count": len(slides),
                     "published": False,
+                    "saved_at": now(),
+                }
+            elif name == "schedule_meeting":
+                result = meeting_result(args)
+            elif name == "create_task_list":
+                result = task_list_result(args)
+            elif name == "draft_email":
+                result = {
+                    "kind": "email",
+                    "artifact_id": uid(),
+                    "to": [x for x in clean_attendees(args.get("to"))],
+                    "subject": string(args.get("subject"), "subject", 200),
+                    "body": string(args.get("body"), "body", 4000),
+                    "sent": False,
                     "saved_at": now(),
                 }
             else:

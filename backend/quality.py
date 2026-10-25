@@ -80,8 +80,8 @@ def check(c, run):
             )
             record(
                 "slide_content",
-                all(s.get("title", "").strip() and s.get("bullets") for s in slides),
-                "Every slide needs a title and at least one point.",
+                all(s.get("title", "").strip() and (s.get("bullets") or s.get("lead") or s.get("stats")) for s in slides),
+                "Every slide needs a title and at least one point, statement or number.",
             )
         elif tool == "create_document":
             body = result.get("body", "")
