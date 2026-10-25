@@ -78,7 +78,7 @@ class FastAPITransportTests(unittest.TestCase):
                 for path in schema["paths"].values()
                 for method in path
             ),
-            58,
+            59,
         )
         run = schema["paths"]["/api/agents/{agent_id}/runs"]["post"]
         self.assertEqual(

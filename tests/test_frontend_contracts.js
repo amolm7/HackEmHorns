@@ -16,7 +16,7 @@ vm.runInContext(source, context);
 (async () => {
   await vm.runInContext(`(async () => {
     const calls = [];
-    S = { me: { roles: ['manager'], department_ids: ['support'] }, agents: [], capabilities: [{ id: 'write-document', name: 'Documents' }], 'dev/users': [{id:'pavan',name:'Pavan'}], steps: {}, conversations: {}, runs: [], approvals: [] };
+    S = { me: { roles: ['manager'], department_ids: ['support'] }, agents: [], capabilities: [{ id: 'write-document', name: 'Documents' }], 'dev/users': [{id:'pavan',name:'Pavan',roles:['manager'],department_ids:['support']}], steps: {}, conversations: {}, runs: [], approvals: [] };
     forge = {...forge0(), caps: ['write-document'], mode: 'demo'};
     api = async (...args) => { calls.push(args); return { status: 'created', agent: { id: 'new-agent' } }; };
     await createAgent();
