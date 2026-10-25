@@ -31,7 +31,7 @@ class FastAPITransportTests(unittest.TestCase):
     def hire(self):
         conversation = self.post("recruiter/conversations", {}).json()
         result = self.post(
-            f'recruiter/conversations/{conversation["id"]}/messages',
+            f"recruiter/conversations/{conversation['id']}/messages",
             {
                 "message": "Hire a support agent to triage and draft replies",
                 "department_id": "support",
@@ -41,7 +41,7 @@ class FastAPITransportTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         proposal = result.json()["proposal"]
         result = self.post(
-            f'recruiter/proposals/{proposal["id"]}/confirm',
+            f"recruiter/proposals/{proposal['id']}/confirm",
             {"revision": proposal["revision"]},
         )
         self.assertEqual(result.status_code, 200, result.text)
@@ -49,14 +49,22 @@ class FastAPITransportTests(unittest.TestCase):
 
     def test_work_queue_http_assignment(self):
         agent = self.hire()
-        batch = self.post('work-queue/sample-batch', {'workflow': 'support'})
+        batch = self.post("work-queue/sample-batch", {"workflow": "support"})
         self.assertEqual(batch.status_code, 200, batch.text)
         item = batch.json()[0]
-        response = self.post('work-queue/' + item['id'] + '/assign', {'agent_id': agent['id'], 'mode': 'demo'})
+        response = self.post(
+            "work-queue/" + item["id"] + "/assign",
+            {"agent_id": agent["id"], "mode": "demo"},
+        )
         self.assertEqual(response.status_code, 200, response.text)
-        repeated = self.post('work-queue/' + item['id'] + '/assign', {'agent_id': agent['id'], 'mode': 'demo'})
+        repeated = self.post(
+            "work-queue/" + item["id"] + "/assign",
+            {"agent_id": agent["id"], "mode": "demo"},
+        )
         self.assertEqual(repeated.status_code, 409)
-        bad = self.post('work-queue', {'workflow': 'unknown', 'title': 'test', 'task': 'test'})
+        bad = self.post(
+            "work-queue", {"workflow": "unknown", "title": "test", "task": "test"}
+        )
         self.assertEqual(bad.status_code, 422)
 
     def test_real_fastapi_routes_and_openapi_contract(self):
@@ -70,7 +78,7 @@ class FastAPITransportTests(unittest.TestCase):
                 for path in schema["paths"].values()
                 for method in path
             ),
-            45,
+            50,
         )
         run = schema["paths"]["/api/agents/{agent_id}/runs"]["post"]
         self.assertEqual(
@@ -96,10 +104,10 @@ class FastAPITransportTests(unittest.TestCase):
             {"task": "login", "roles": ["admin"]},
             {"task": "login", "max_steps": True},
         ]:
-            response = self.post(f'agents/{agent["id"]}/runs', payload)
+            response = self.post(f"agents/{agent['id']}/runs", payload)
             self.assertEqual(response.status_code, 422, response.text)
         response = self.post(
-            f'agents/{agent["id"]}/runs',
+            f"agents/{agent['id']}/runs",
             {"task": "login", "max_steps": "private-input-do-not-echo"},
         )
         self.assertNotIn("private-input-do-not-echo", response.text)
@@ -173,7 +181,7 @@ class FastAPITransportTests(unittest.TestCase):
     def test_full_hire_run_approval_replay_over_fastapi(self):
         agent = self.hire()
         result = self.post(
-            f'agents/{agent["id"]}/runs',
+            f"agents/{agent['id']}/runs",
             {"task": "Triage the login outage", "max_steps": 8},
             key="submit",
         )
@@ -181,15 +189,15 @@ class FastAPITransportTests(unittest.TestCase):
         run = result.json()
         self.service.runtime.tick()
         review = self.client.get("/api/approvals?status=pending").json()[0]
-        steps = self.client.get(f'/api/runs/{run["id"]}/steps').json()
+        steps = self.client.get(f"/api/runs/{run['id']}/steps").json()
         self.assertFalse(any(s["kind"] == "tool" for s in steps))
-        path = f'approvals/{review["id"]}/decision'
+        path = f"approvals/{review['id']}/decision"
         first = self.post(path, {"decision": "approve"}, key="review")
         second = self.post(path, {"decision": "approve"}, key="review")
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(first.json(), second.json())
         self.service.runtime.tick()
-        steps = self.client.get(f'/api/runs/{run["id"]}/steps').json()
+        steps = self.client.get(f"/api/runs/{run['id']}/steps").json()
         self.assertEqual(sum(s["kind"] == "tool" for s in steps), 1)
 
     def test_patch_contract_disallows_privilege_fields_and_nulls(self):

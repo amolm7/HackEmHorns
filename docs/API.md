@@ -4,7 +4,7 @@ Base URL: `http://localhost:8000/api`. Swagger UI: `/docs`. Machine-readable Ope
 
 ## Identity, errors and replay protection
 
-`X-Dev-User: pavan` selects a server-defined local test identity. Default: `pavan`. This is intentionally not production authentication; only localhost is supported. A `roles` or `level` field in a request cannot grant authority.
+`AUTH_MODE=password` uses a server-side session cookie. POST `/auth/login` with username/password, GET `/auth/session` for a CSRF token, and include `X-CSRF-Token` on authenticated mutations. POST `/auth/logout` revokes the session. `X-Dev-User` is ignored in this mode. In development mode only, `X-Dev-User: pavan` selects a local test identity (default `pavan`). Production requires password mode and a configured HTTPS origin. See [operations](OPERATIONS.md). A `roles` or `level` field in a request cannot grant authority.
 
 Seed users: `amol` (admin/manager), `tarun` (manager), `shaun` (builder), `pavan` (manager/builder), `member`, `auditor`. The test-only other organization identity is disabled in the running app.
 
@@ -14,9 +14,9 @@ Error envelope:
 {"error":{"code":"permission_denied","message":"Only the assigned manager or an organization admin may do this.","details":{}}}
 ```
 
-400 = invalid domain input, 403 = permission/access denied, 404 = absent/inaccessible resource, 409 = state/version/idempotency conflict, 413 = oversized body, 415 = content type, 422 = Pydantic validation failure or unsupported sandbox request, 502 = model/tool transport failure. Malformed JSON, invalid UUIDs/enums, extra fields, type coercion attempts, and missing required idempotency headers now return 422. Validation errors keep the error envelope and include field locations/messages without echoing input values. HTTP mutations return 200 with the resource; run execution continues asynchronously.
+401 = sign-in required/expired, 429 = rate limited, 503 = not ready, 400 = invalid domain input, 403 = permission/access denied, 404 = absent/inaccessible resource, 409 = state/version/idempotency conflict, 413 = oversized body, 415 = content type, 422 = Pydantic validation failure or unsupported sandbox request, 502 = model/tool transport failure. Malformed JSON, invalid UUIDs/enums, extra fields, type coercion attempts, and missing required idempotency headers now return 422. Validation errors keep the error envelope and include field locations/messages without echoing input values. HTTP mutations return 200 with the resource; run execution continues asynchronously.
 
-Required `Idempotency-Key` header on proposal confirmation, marketplace install, run submission, approval decisions, and task outcome recording. The key is scoped to actor, org, operation and path. Same key/body returns the original result; same key/different body returns 409. Use a new UUID for a new operation, retain it for retries. Stored replay results are snapshots, so GET the resource for its current state.
+Required `Idempotency-Key` header on proposal confirmation, marketplace install, run submission, approval decisions, task outcome recording, and all work-queue POST operations. The key is scoped to actor, org, operation and path. Same key/body returns the original result; same key/different body returns 409. Use a new UUID for a new operation, retain it for retries. Stored replay results are snapshots, so GET the resource for its current state.
 
 ## Identity and configuration
 
@@ -178,3 +178,18 @@ Publish body: `{ "kind": "agent", "source_id": "<agent-id>" }`, or `kind: capabi
 Agent install body: `{ "department_id": "support", "manager_id": "pavan" }`. Returns `install` and `resource`; the agent is an Intern with no bindings. Capability install body `{}` returns an unbound recipe reference and measured install record; the actual capability is already in the same-company catalog and is bound/validated when attached to an agent. Global copies are not implemented.
 
 Nutrition labels show actual validation counts and scope. Each listing retains its original creator separately from its publisher. Installs credit both the listing creator and reused capability creators. Publisher verification and security scanning are `null`; no badge is fabricated. The leaderboard does not calculate money/time savings or cross-company scores.
+
+
+## Work queue and quality
+
+`GET /work-queue` lists actor-visible jobs. `POST /work-queue` accepts `workflow` (`launch`, `analysis`, `brief`), `title`, `task`, optional `department_id`, and optional `acceptance`:
+
+```json
+{"workflow":"launch","title":"Campus launch","task":"Prepare the package.\nchannel,signups\nAmbassadors,180\nSocial,240","acceptance":{"slide_count":5,"required_sections":["Recommendation","Risks","Next steps"],"min_document_words":40}}
+```
+
+Analysis workflows require a CSV source in the brief. `POST /work-queue/sample-batch` loads labeled fictional input for a workflow. `POST /work-queue/{id}/assign` accepts `agent_id` and `mode`. `POST /work-queue/{id}/review` accepts `success` and `comment`; passing automated checks is necessary but not sufficient for manager acceptance. IDs here can also be stable seeded IDs, not just UUIDs.
+
+Job results include `quality` (`passed`, individual checks, limits), artifacts, ownership, outcome and timestamps. A final run with missing/invalid deliverables gets `error_code=deliverable_validation` after at most one live repair attempt. Retryable provider errors preserve `retry_count` and `next_attempt_at`; exhaustion produces `error_code=retry_exhausted`. Rerun corrected/failed jobs through assignment; prior attempt IDs and deliverables remain available.
+
+`GET /auth/config` is public and exposes only the authentication mode. `/health` and `/ready` are public liveness/readiness probes. Readiness is not an assertion of deployment security.

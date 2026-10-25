@@ -1,5 +1,5 @@
 "use strict";
-/* Hire an Agent: frontend. Talks only to the documented /api endpoints.
+/* ORBIT: frontend. Talks only to the documented /api endpoints.
    Strict CSP: no inline handlers or styles. Events are delegated; dynamic sizing goes through CSSOM or SVG attributes. */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -39,6 +39,7 @@ const ICONS = {
 const icon = (name, cls = "") => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${(ICONS[name] || ICONS.tool).map(d => `<path d="${d}"/>`).join("")}</svg>`;
 
 /* ---------- state ---------- */
+let csrfToken = null, authMode = "development", authReady = false;
 let user = sessionStorage.getItem("dev-user") || "pavan";
 let S = { steps: {} };
 let busy = false;
@@ -47,9 +48,17 @@ let forge = forge0();
 const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, apart: {}, drafts: {}, metrics: {}, revise: {}, pulse: 0, stick: true };
 
 async function api(path, method = "GET", body) {
-  const headers = { "X-Dev-User": user };
-  if (method !== "GET") { headers["Content-Type"] = "application/json"; headers["Idempotency-Key"] = crypto.randomUUID(); }
+  const headers = authMode === "password" ? (csrfToken ? { "X-CSRF-Token": csrfToken } : {}) : { "X-Dev-User": user };
+  let replayKey = null;
+  if (method !== "GET") {
+    headers["Content-Type"] = "application/json";
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([method, path, body])));
+    replayKey = "pending-request:" + user + ":" + Array.from(new Uint8Array(bytes), b=>b.toString(16).padStart(2,"0")).join("");
+    headers["Idempotency-Key"] = sessionStorage.getItem(replayKey) || crypto.randomUUID();
+    sessionStorage.setItem(replayKey, headers["Idempotency-Key"]);
+  }
   const res = await fetch("/api/" + path, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  if (replayKey && res.status < 500) sessionStorage.removeItem(replayKey);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Error(data.error?.message || `Request failed (${res.status}).`);
   return data;
@@ -59,6 +68,7 @@ async function load() {
   const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "runs", "marketplace", "leaderboard", "work-queue"];
   const vals = await Promise.all(paths.map(p => api(p)));
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
+  if (authMode === "password") { user = S.me.id; $("#identity").disabled = true; if (!$("#sign-out")) { const b = document.createElement("button"); b.id = "sign-out"; b.className = "btn small"; b.textContent = "Sign out"; b.setAttribute("aria-label", "Sign out"); b.addEventListener("click", async () => { await api("auth/logout", "POST", {}); location.reload(); }); $("#identity").closest("label").after(b); } }
   S.approvals = await api("approvals").catch(() => []);
   S.proposals = await api("recruiter/proposals").catch(() => []);
   await loadSteps();
@@ -133,7 +143,7 @@ function render() {
   const views = { new: forgeScreen, agent: chatScreen, inbox: inboxScreen, leaderboard: leaderboardScreen, library: libraryScreen, jobs: jobsScreen };
   document.body.dataset.view = r.name;
   $("#view").innerHTML = (views[r.name] || forgeScreen)(r.id);
-  document.title = (r.name === "agent" ? agentById(r.id)?.name || "Agent" : TITLES[r.name] || "New agent") + " · Hire an Agent";
+  document.title = (r.name === "agent" ? agentById(r.id)?.name || "Agent" : TITLES[r.name] || "New agent") + " · ORBIT";
   sidebarActive();
   if (r.name === "agent" && ui.stick) requestAnimationFrame(() => scrollTo({ top: document.body.scrollHeight }));
   if (ui.fresh) setTimeout(() => { ui.fresh = null; }, 1400);
@@ -141,11 +151,29 @@ function render() {
 function enter() { const v = $("#view"); v.classList.remove("enter"); void v.offsetWidth; v.classList.add("enter"); setTimeout(() => v.classList.remove("enter"), 1600); }
 
 /* ---------- sidebar: agents are the navigation, like conversations ---------- */
+const sidebarMarkup = new Map();
+function stableSidebar(selector, markup) {
+  if (sidebarMarkup.get(selector) !== markup) {
+    $(selector).innerHTML = markup;
+    sidebarMarkup.set(selector, markup);
+  }
+}
 function sidebar() {
-  $("#identity").innerHTML = opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]), user);
+  stableSidebar("#identity", opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]), user));
   const pending = S.approvals.filter(a => a.status === "pending").length, jobs = (S["work-queue"] || []).length;
-  $("#agent-list").innerHTML = S.agents.length ? S.agents.map(a => { const st = agentState(a); return `<li><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a></li>`; }).join("") : `<li class="none">No agents yet</li>`;
-  $("#side-links").innerHTML = [["inbox", "inbox", "Approvals", pending], ["leaderboard", "trophy", "Leaderboard", 0], ["library", "library", "Library", 0], ["jobs", "jobs", "Team jobs", jobs]].map(([r, ic, t, n]) => `<li><a href="#/${r}" data-route="${r}">${icon(ic)}<span class="nm">${t}</span>${n ? `<span class="count ${r === "inbox" ? "warn" : ""}">${n}</span>` : ""}</a></li>`).join("");
+  // Starting a conversation moves its agent to the top; background completions
+  // do not displace the agent the user most recently worked with.
+  const lastUsed = new Map();
+  for (const run of S.runs || []) {
+    const timestamp = Date.parse(run.created_at) || 0;
+    lastUsed.set(run.agent_id, Math.max(lastUsed.get(run.agent_id) || 0, timestamp));
+  }
+  const recentAgents = [...S.agents].sort((a, b) =>
+    (lastUsed.get(b.id) || Date.parse(b.created_at) || 0) -
+    (lastUsed.get(a.id) || Date.parse(a.created_at) || 0)
+  );
+  stableSidebar("#agent-list", recentAgents.length ? recentAgents.map(a => { const st = agentState(a); return `<li><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a></li>`; }).join("") : `<li class="none">No agents yet</li>`);
+  stableSidebar("#side-links", [["inbox", "inbox", "Approvals", pending], ["leaderboard", "trophy", "Leaderboard", 0], ["library", "library", "Library", 0], ["jobs", "jobs", "Team jobs", jobs]].map(([r, ic, t, n]) => `<li><a href="#/${r}" data-route="${r}">${icon(ic)}<span class="nm">${t}</span>${n ? `<span class="count ${r === "inbox" ? "warn" : ""}">${n}</span>` : ""}</a></li>`).join(""));
   sidebarActive();
 }
 function sidebarActive() {
@@ -264,6 +292,7 @@ function artifactView(runId, x) {
 }
 /* What the agent "says" around its results. Written by the UI from the run state (see docs/BACKEND-NOTES.md). */
 function narrate(r, arts) {
+  if (r.next_attempt_at) return `<p class="note">Temporary provider issue. Retry ${esc(r.retry_count)} scheduled for ${esc(new Date(r.next_attempt_at).toLocaleTimeString())}.</p>`;
   if (r.status === "queued" || r.status === "running") return `<p class="thinking">${arts.length ? "Working on the next step" : "Thinking"}</p>`;
   if (r.status === "awaiting_approval") return "";
   if (r.status === "failed") return `<p class="err">${esc(r.error || "I stopped before finishing.")}</p>`;
@@ -273,7 +302,7 @@ function narrate(r, arts) {
   const parts = [made.includes("analysis") && "analyzed your data", made.includes("slideshow") && "built the slideshow", made.includes("document") && "wrote the document", made.includes("page") && "read the page"].filter(Boolean);
   return parts.length ? `<p>Done. I ${parts.join(", ").replace(/, ([^,]*)$/, " and $1")}.</p>` : `<p>Done.</p>`;
 }
-const KIND = { planner: "Plan", plan: "Plan", model: "Think", tool: "Run", gate: "Ask", approval: "Ask", decision: "Review", revision: "Revise", answer: "Answer", error: "Error" };
+const KIND = { validation: "Check", retry: "Retry", planner: "Plan", plan: "Plan", model: "Think", tool: "Run", gate: "Ask", approval: "Ask", decision: "Review", revision: "Revise", answer: "Answer", error: "Error" };
 function agentTurn(r, a) {
   const steps = S.steps[r.id]?.list || [], arts = steps.filter(s => s.kind === "tool").map(s => ({ label: s.label, result: s.data.result }));
   const ask = S.approvals.find(x => x.run_id === r.id && x.status === "pending");
@@ -403,8 +432,9 @@ function jobItem(w) {
   return `<section class="job"><div class="job-head"><div><span class="note">${esc(job.name)} · ${w.sample_data ? "fictional input" : "your input"}</span><h2>${esc(w.title)}</h2></div><span class="state ${esc(w.status)}">${esc(state)}</span></div>
     <p class="note">${esc(job.deliverables)}${a ? " · " + esc(a.name) : ""}</p>
     ${w.ticket ? `<p>${esc(w.ticket.body)}</p>` : `<details class="quiet"><summary>Brief and rules</summary><pre>${esc(w.task)}</pre></details>`}
-    ${!w.run_id || ["needs_correction", "failed", "cancelled"].includes(w.status) ? `<form class="row wrap" data-form="assign-ticket" data-id="${id}"><select name="agent_id" required aria-label="Agent">${opts(eligible.map(x => [x.id, x.name]), "")}</select><select name="mode" aria-label="Model">${opts(S["model-profiles"].filter(m => m.enabled).map(m => [m.id, m.id === "demo" ? "Demo model" : m.name]), "demo")}</select><button class="btn primary small" ${eligible.length ? "" : "disabled"}>${w.run_id ? "Rerun" : "Assign"}</button>${eligible.length ? "" : `<button type="button" class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}">Build an agent for this</button>`}</form>` : `<a class="link-btn" href="#/agent/${esc(w.agent_id)}">Open the conversation</a>`}
+    ${!w.run_id || ["needs_correction", "failed", "cancelled"].includes(w.status) ? `<form class="row wrap" data-form="assign-ticket" data-id="${id}"><select name="agent_id" required aria-label="Agent">${opts(eligible.map(x => [x.id, x.name]), w.agent_id || "")}</select><select name="mode" aria-label="Model">${opts(S["model-profiles"].filter(m => m.enabled).map(m => [m.id, m.id === "demo" ? "Demo model" : m.name]), S.runs.find(r=>r.id === w.run_id)?.mode || "demo")}</select><button class="btn primary small" ${eligible.length ? "" : "disabled"}>${w.run_id ? "Rerun" : "Assign"}</button>${eligible.length ? "" : `<button type="button" class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}">Build an agent for this</button>`}</form>` : `<a class="link-btn" href="#/agent/${esc(w.agent_id)}">Open the conversation</a>`}
     ${w.artifacts?.length && w.finished_at ? `<details class="quiet"><summary>Deliverables (${w.artifacts.length})</summary>${w.artifacts.map((x, i) => artifactView(w.run_id + "-" + i, x)).join("")}</details>` : ""}
+    ${w.quality ? `<details class="quiet"><summary>Deliverable checks · ${w.quality.passed ? "passed" : "needs repair"}</summary><ul>${w.quality.checks.map(c=>`<li>${c.passed ? "✓" : "×"} ${esc(c.detail)}</li>`).join("")}</ul><p class="note">${esc(w.quality.limits)}</p></details>` : ""}
     ${w.error ? `<p class="err">${esc(w.error)}</p>` : ""}
     ${w.finished_at && !w.outcome && ["completed", "failed"].includes(w.status) && canReview ? `<form class="stack" data-form="review-ticket" data-id="${id}"><textarea name="comment" required placeholder="Does it meet the brief? What needs fixing?" aria-label="Review notes"></textarea><div class="row"><button class="btn primary small" name="success" value="true" ${w.deliverables_ready && w.status === "completed" ? "" : "disabled"}>Accept</button><button class="btn small" name="success" value="false">Needs correction</button></div></form>` : ""}
     ${w.outcome ? `<p class="note">Review: ${esc(w.outcome.comment)}</p>` : ""}</section>`;
@@ -519,7 +549,38 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") { $$("details.menu[open]").forEach(d => d.removeAttribute("open")); document.body.classList.remove("side-open"); }
 });
 document.addEventListener("click", e => { $$("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.removeAttribute("open"); }); });
-$("#identity").addEventListener("change", e => { user = e.target.value; sessionStorage.setItem("dev-user", user); forge = forge0(); S.steps = {}; act(async () => `Signed in as ${userName(user)}.`); });
+$("#identity").addEventListener("change", e => { if (authMode === "password") return; user = e.target.value; sessionStorage.setItem("dev-user", user); forge = forge0(); S.steps = {}; act(async () => `Signed in as ${userName(user)}.`); });
+// Resize only the desktop shell; the mobile drawer keeps its existing behavior.
+(() => {
+  const handle = $("#side-resize"), root = document.documentElement;
+  const widthKey = "agent-sidebar-width";
+  const applyWidth = value => {
+    const width = Math.max(200, Math.min(420, Math.round(value)));
+    root.style.setProperty("--side", `${width}px`);
+    handle.setAttribute("aria-valuenow", String(width));
+    return width;
+  };
+  const saveWidth = () => { try { localStorage.setItem(widthKey, handle.getAttribute("aria-valuenow")); } catch {} };
+  try { const saved = Number(localStorage.getItem(widthKey)); if (Number.isFinite(saved) && saved >= 200) applyWidth(saved); } catch {}
+  let dragging = false;
+  const finish = () => { if (!dragging) return; dragging = false; document.body.classList.remove("resizing-side"); saveWidth(); };
+  handle.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || !matchMedia("(min-width:901px)").matches) return;
+    event.preventDefault(); dragging = true; handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-side");
+  });
+  handle.addEventListener("pointermove", event => { if (dragging) applyWidth(event.clientX); });
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", finish);
+  handle.addEventListener("dblclick", () => { applyWidth(250); saveWidth(); });
+  handle.addEventListener("keydown", event => {
+    const current = Number(handle.getAttribute("aria-valuenow"));
+    const values = { ArrowLeft: current - 10, ArrowRight: current + 10, Home: 200, End: 420 };
+    if (!(event.key in values)) return;
+    event.preventDefault(); applyWidth(values[event.key]); saveWidth();
+  });
+})();
 $("#menu-btn").addEventListener("click", () => document.body.classList.toggle("side-open"));
 $("#scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
 addEventListener("hashchange", async () => { document.body.classList.remove("side-open"); if (route().name === "agent") await loadSteps().catch(() => {}); render(); enter(); if (route().name !== "agent") scrollTo({ top: 0 }); });
@@ -562,10 +623,45 @@ function startSky() {
   start();
 }
 
+async function authenticate() {
+  const response = await fetch("/api/auth/config");
+  if (!response.ok) throw Error("Authentication configuration is unavailable.");
+  const config = await response.json(); authMode = config.mode;
+  if (authMode !== "password") return;
+  $("#identity").disabled = true;
+  $("#identity").setAttribute("aria-label", "Signed in account");
+  const identityLabel = document.querySelector("label.identity span"); if (identityLabel) identityLabel.textContent = "Signed in account";
+  const restore = await fetch("/api/auth/session");
+  if (restore.ok) { const session = await restore.json(); csrfToken = session.csrf_token; user = session.user.id; return; }
+  document.body.classList.add("auth-screen");
+  $("#side").hidden = true;
+  $("#view").innerHTML = `<div class="auth-layout">
+    <header class="auth-header"><div class="brand"><span class="brand-dot" aria-hidden="true"></span>ORBIT</div><span class="auth-header-note">YOUR TEAM. A NEW ORBIT.</span></header>
+    <section class="auth-content" aria-labelledby="login-title">
+      <div class="auth-story"><span class="auth-eyebrow">A LITTLE HUMAN DIRECTION.</span><h1>A whole new<br>way to work.</h1><p>Give your agents a purpose.<br>Build a team that goes further.</p><div class="auth-principles"><span>Hire for the job</span><span>Review the work</span><span>Grow their autonomy</span></div></div>
+      <div class="auth-card"><span class="auth-eyebrow">WELCOME BACK</span><h2 id="login-title">Your next chapter<br>starts here.</h2><p class="auth-subtitle">Sign in to your team’s workspace.</p>
+        <form id="password-login"><label for="login-username">Username</label><input id="login-username" name="username" autocomplete="username" placeholder="Your username" required maxlength="100" autocapitalize="none" spellcheck="false"><label for="login-password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required maxlength="256"><button class="btn primary" type="submit">Enter your workspace <span aria-hidden="true">↗</span></button><p id="login-error" role="alert" aria-live="polite"></p></form>
+        <p class="auth-help">Need an account? Ask your workspace admin.</p>
+      </div>
+    </section><footer class="auth-footer"><span>Put your team’s potential in motion.</span><span>ORBIT</span></footer>
+  </div>`;
+  await new Promise(resolve => {
+    $("#password-login").addEventListener("submit", async event => {
+      event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
+      try {
+        const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+        const session = await response.json();
+        if (!response.ok) throw Error(session.error?.message || "Sign-in failed.");
+        csrfToken = session.csrf_token; user = session.user.id; form.reset(); document.body.classList.remove("auth-screen"); $("#side").hidden = false; resolve();
+      } catch (error) { $("#login-error").textContent = error.message; button.disabled = false; }
+    });
+  });
+}
+
 /* ---------- boot and polling ---------- */
 (async () => {
   startSky();
-  try { await load(); if (!location.hash && S.agents.length) location.replace("#/agent/" + S.agents[0].id); render(); enter(); }
+  try { await authenticate(); await load(); authReady = true; if (!location.hash && S.agents.length) location.replace("#/agent/" + S.agents[0].id); render(); enter(); }
   catch (e) { $("#view").innerHTML = `<div class="center-msg"><h2>Can't reach the server</h2><p class="note">Start it with ./run-arcade.command, then reload.</p></div>`; toast(e.message, true); }
 })();
 
@@ -573,7 +669,7 @@ function startSky() {
   const active = S.runs?.some(r => !TERMINAL.includes(r.status));
   setTimeout(async () => {
     const el = document.activeElement, typing = ["INPUT", "TEXTAREA", "SELECT"].includes(el?.tagName) && el.value;
-    if (!busy && !document.hidden && !typing && !$("details.menu[open]") && route().name !== "new") {
+    if (authReady && !busy && !document.hidden && !typing && !$("details.menu[open]") && route().name !== "new") {
       try {
         const snap = () => JSON.stringify([S.runs, S.approvals, S.agents, S.leaderboard, S["work-queue"], Object.values(S.steps).map(s => s.updated)]);
         const before = snap(); await load();

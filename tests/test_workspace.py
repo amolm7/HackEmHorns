@@ -25,13 +25,20 @@ class WorkspaceTests(unittest.TestCase):
 
     def hire(self, message, caps=None, **extra):
         conv = self.call("POST", "recruiter/conversations", {})
-        data = {"message": message, "department_id": "support", "manager_id": "pavan", **extra}
+        data = {
+            "message": message,
+            "department_id": "support",
+            "manager_id": "pavan",
+            **extra,
+        }
         if caps is not None:
             data["capability_ids"] = caps
-        p = self.call("POST", f'recruiter/conversations/{conv["id"]}/messages', data)["proposal"]
+        p = self.call("POST", f"recruiter/conversations/{conv['id']}/messages", data)[
+            "proposal"
+        ]
         agent = self.call(
             "POST",
-            f'recruiter/proposals/{p["id"]}/confirm',
+            f"recruiter/proposals/{p['id']}/confirm",
             {"revision": p["revision"]},
             key="hire:" + p["id"],
         )
@@ -40,7 +47,7 @@ class WorkspaceTests(unittest.TestCase):
     def start(self, agent, task, **extra):
         return self.call(
             "POST",
-            f'agents/{agent["id"]}/runs',
+            f"agents/{agent['id']}/runs",
             {"task": task, **extra},
             key="run:" + str(len(self.call("GET", "runs"))),
         )
@@ -52,7 +59,7 @@ class WorkspaceTests(unittest.TestCase):
                 for a in self.call("GET", "approvals?status=pending"):
                     self.call(
                         "POST",
-                        f'approvals/{a["id"]}/decision',
+                        f"approvals/{a['id']}/decision",
                         {"decision": "approve", "comment": ""},
                         key="d:" + a["id"],
                     )
@@ -60,7 +67,7 @@ class WorkspaceTests(unittest.TestCase):
     def tool_results(self, run):
         return [
             s["data"]["result"]
-            for s in self.call("GET", f'runs/{run["id"]}/steps')
+            for s in self.call("GET", f"runs/{run['id']}/steps")
             if s["kind"] == "tool"
         ]
 
@@ -87,7 +94,12 @@ class WorkspaceTests(unittest.TestCase):
         db = Database(Path(self.tmp.name) / "old.db")
         seed(db)
         with db.transaction(True) as c:
-            for cap in ["make-slideshow", "write-document", "analyze-data", "research-web"]:
+            for cap in [
+                "make-slideshow",
+                "write-document",
+                "analyze-data",
+                "research-web",
+            ]:
                 c.execute("DELETE FROM capabilities WHERE id=?", (cap,))
             c.execute("DELETE FROM connections WHERE id='workspace-local'")
             ticket = get(c, "capabilities", "ticket-search")
@@ -98,7 +110,9 @@ class WorkspaceTests(unittest.TestCase):
         with db.transaction() as c:
             ids = {x["id"] for x in all_rows(c, "capabilities")}
             self.assertEqual(len(ids), 7)
-            self.assertEqual(get(c, "capabilities", "ticket-search")["group"], "Support sandbox")
+            self.assertEqual(
+                get(c, "capabilities", "ticket-search")["group"], "Support sandbox"
+            )
             self.assertEqual(get(c, "connections", "workspace-local")["active"], True)
 
     def test_recruiter_infers_workspace_capabilities_and_names(self):
@@ -106,7 +120,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(p["spec"]["capability_ids"], ["make-slideshow"])
         self.assertEqual(agent["name"], "Slide Builder")
         self.assertEqual(agent["bindings"][0]["connection_id"], "workspace-local")
-        self.assertNotIn("support", agent["instructions"].lower().split("capabilities")[0])
+        self.assertNotIn(
+            "support", agent["instructions"].lower().split("capabilities")[0]
+        )
         p, agent = self.hire("Hire an agent that triages tickets and drafts replies")
         self.assertIn("ticket-search", p["spec"]["capability_ids"])
         self.assertEqual(agent["name"], "Ticket Triage")
@@ -114,19 +130,24 @@ class WorkspaceTests(unittest.TestCase):
     def test_mixed_capabilities_use_each_capabilitys_own_connection(self):
         _, agent = self.hire("Support deck", caps=["make-slideshow", "ticket-search"])
         used = {b["capability_id"]: b["connection_id"] for b in agent["bindings"]}
-        self.assertEqual(used, {"make-slideshow": "workspace-local", "ticket-search": "support-local"})
+        self.assertEqual(
+            used,
+            {"make-slideshow": "workspace-local", "ticket-search": "support-local"},
+        )
 
     def test_demo_slideshow_intern_waits_then_saves_deck(self):
         _, agent = self.hire("Make slides", caps=["make-slideshow"])
         run = self.start(agent, "Make a 4-slide deck about customer onboarding")
         self.drain(approve=False)
-        self.assertEqual(self.call("GET", f'runs/{run["id"]}')["status"], "awaiting_approval")
+        self.assertEqual(
+            self.call("GET", f"runs/{run['id']}")["status"], "awaiting_approval"
+        )
         self.assertEqual(self.tool_results(run), [])
         approval = self.call("GET", "approvals?status=pending")[0]
         self.assertEqual(approval["policy"]["risk"], "local_write")
         self.assertIn("outline", approval["action"]["arguments"])
         self.drain()
-        done = self.call("GET", f'runs/{run["id"]}')
+        done = self.call("GET", f"runs/{run['id']}")
         self.assertEqual(done["status"], "completed")
         deck = self.tool_results(run)[0]
         self.assertEqual(deck["kind"], "slideshow")
@@ -135,10 +156,21 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(deck["published"])
         self.assertEqual(deck["title"], "Customer onboarding")
 
-    def test_runs_alone_mode_skips_approval_for_reads_and_local_saves_but_not_drafts(self):
-        _, agent = self.hire("Everything", caps=["make-slideshow", "analyze-data", "reply-drafts"])
-        self.call("POST", f'agents/{agent["id"]}/level', {"level": "associate", "reason": "Reviewed"})
-        run = self.start(agent, "Analyze this data: a,b\nx,1\ny,2\nthen make a deck and draft a reply")
+    def test_runs_alone_mode_skips_approval_for_reads_and_local_saves_but_not_drafts(
+        self,
+    ):
+        _, agent = self.hire(
+            "Everything", caps=["make-slideshow", "analyze-data", "reply-drafts"]
+        )
+        self.call(
+            "POST",
+            f"agents/{agent['id']}/level",
+            {"level": "associate", "reason": "Reviewed"},
+        )
+        run = self.start(
+            agent,
+            "Analyze this data: a,b\nx,1\ny,2\nthen make a deck and draft a reply",
+        )
         self.drain(approve=False)
         pending = self.call("GET", "approvals?status=pending")
         self.assertEqual([a["action"]["tool_id"] for a in pending], ["create_draft"])
@@ -147,7 +179,9 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_analyze_data_computes_real_numbers_and_chart(self):
         _, agent = self.hire("Data", caps=["analyze-data"])
-        run = self.start(agent, "Analyze this data:\nmonth,revenue\nJan,100\nFeb,300\nMar,200")
+        run = self.start(
+            agent, "Analyze this data:\nmonth,revenue\nJan,100\nFeb,300\nMar,200"
+        )
         self.drain()
         result = self.tool_results(run)[0]
         self.assertEqual(result["rows"], 3)
@@ -156,22 +190,38 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result["chart"]["points"][1], {"label": "Feb", "value": 300.0})
         self.assertIn("Highest revenue: Feb (300)", result["highlights"])
 
+    def test_document_accepts_essay_and_rejects_oversized_content(self):
+        body = "A historical essay. " * 400
+        result = mcp_module.perform(self.app.db, "create_document", {"title": "Essay", "body": body}, "essay")
+        self.assertEqual(result["body"], body.strip())
+        from backend.registry import TOOLS
+        self.assertEqual(TOOLS["create_document"]["inputSchema"]["properties"]["body"]["maxLength"], 40000)
+        with self.assertRaises(Error):
+            mcp_module.perform(self.app.db, "create_document", {"title": "Essay", "body": "x" * 40001}, "oversized")
+
     def test_document_tool_saves_once_per_execution_id(self):
         args = {"title": "Plan", "body": "# Plan\n- one"}
         first = mcp_module.perform(self.app.db, "create_document", args, "exec-1")
         again = mcp_module.perform(self.app.db, "create_document", args, "exec-1")
         self.assertEqual(first["artifact_id"], again["artifact_id"])
         with self.assertRaises(Error):
-            mcp_module.perform(self.app.db, "create_document", {**args, "title": "Other"}, "exec-1")
+            mcp_module.perform(
+                self.app.db, "create_document", {**args, "title": "Other"}, "exec-1"
+            )
 
     def test_research_needs_a_link_in_demo_mode_and_blocks_private_addresses(self):
         _, agent = self.hire("Research", caps=["research-web"])
         run = self.start(agent, "Summarize the news")
         self.drain()
-        failed = self.call("GET", f'runs/{run["id"]}')
+        failed = self.call("GET", f"runs/{run['id']}")
         self.assertEqual(failed["status"], "failed")
         self.assertIn("Add a web address", failed["error"])
-        for url in ["http://127.0.0.1:8000/api/me", "http://localhost/", "file:///etc/passwd", "http://user:pw@example.com/"]:
+        for url in [
+            "http://127.0.0.1:8000/api/me",
+            "http://localhost/",
+            "file:///etc/passwd",
+            "http://user:pw@example.com/",
+        ]:
             with self.assertRaises(Error):
                 mcp_module.perform(self.app.db, "read_url", {"url": url}, "x")
 
@@ -206,25 +256,37 @@ class WorkspaceTests(unittest.TestCase):
             def open(self, request, timeout=0):
                 return Response(page)
 
-        with patch.object(mcp_module, "public_address"), patch.object(
-            mcp_module.urllib.request, "build_opener", return_value=Opener()
+        with (
+            patch.object(mcp_module, "public_address", return_value=["93.184.216.34"]),
+            patch.object(
+                mcp_module.urllib.request, "build_opener", return_value=Opener()
+            ),
         ):
-            out = mcp_module.perform(self.app.db, "read_url", {"url": "https://example.com/a"}, "x")
+            out = mcp_module.perform(
+                self.app.db, "read_url", {"url": "https://example.com/a"}, "x"
+            )
         self.assertEqual(out["title"], "Hello & welcome")
         self.assertEqual(out["text"], "First paragraph. Second.")
         self.assertNotIn("evil", out["text"])
 
     def test_article_extraction_omits_page_navigation(self):
         parser = mcp_module._PageText()
-        parser.feed('<html><body><header>Menu</header><nav>Jump to content</nav>'
-                    '<main><nav>Contents</nav><article><p>Kobe won five championships.</p>'
-                    '<script>noise()</script></article></main><footer>Donate</footer></body></html>')
+        parser.feed(
+            "<html><body><header>Menu</header><nav>Jump to content</nav>"
+            "<main><nav>Contents</nav><article><p>Kobe won five championships.</p>"
+            "<script>noise()</script></article></main><footer>Donate</footer></body></html>"
+        )
         self.assertEqual(parser.text(), "Kobe won five championships.")
 
     def test_missing_page_returns_recoverable_tool_result(self):
-        failure = mcp_module.urllib.error.HTTPError("https://example.com/missing", 404, "Missing", {}, None)
-        with patch.object(mcp_module, "public_address"), patch.object(
-            mcp_module.urllib.request.OpenerDirector, "open", side_effect=failure
+        failure = mcp_module.urllib.error.HTTPError(
+            "https://example.com/missing", 404, "Missing", {}, None
+        )
+        with (
+            patch.object(mcp_module, "public_address", return_value=["93.184.216.34"]),
+            patch.object(
+                mcp_module.urllib.request.OpenerDirector, "open", side_effect=failure
+            ),
         ):
             result = mcp_module.read_page("https://example.com/missing")
         self.assertEqual(result["kind"], "page_error")
@@ -233,16 +295,22 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_tool_arguments_reject_unknown_or_non_text_fields(self):
         _, agent = self.hire("Data", caps=["analyze-data"])
-        self.call("POST", f'agents/{agent["id"]}/level', {"level": "associate", "reason": "ok"})
+        self.call(
+            "POST",
+            f"agents/{agent['id']}/level",
+            {"level": "associate", "reason": "ok"},
+        )
         run = self.start(agent, "Analyze this data:\na,b\n1,2")
         with self.app.db.transaction(True) as c:
             row = get(c, "runs", run["id"])
             row["contents"] = [{"role": "user", "parts": [{"text": "x"}]}]
-            row["queue"] = [{"name": "analyze_data", "args": {"table": "a\n1", "extra": "no"}}]
+            row["queue"] = [
+                {"name": "analyze_data", "args": {"table": "a\n1", "extra": "no"}}
+            ]
             row["mode"] = "demo"
             put(c, "runs", row)
         self.drain()
-        self.assertEqual(self.call("GET", f'runs/{run["id"]}')["status"], "failed")
+        self.assertEqual(self.call("GET", f"runs/{run['id']}")["status"], "failed")
 
     def test_follow_up_continues_live_conversation_only(self):
         _, agent = self.hire("Docs", caps=["write-document"])
@@ -252,12 +320,18 @@ class WorkspaceTests(unittest.TestCase):
             self.start(agent, "Make it shorter", follow_up_of=first["id"])
         with self.app.db.transaction(True) as c:
             row = get(c, "runs", first["id"])
-            row.update(mode="meta", contents=[{"role": "user", "parts": [{"text": "hi"}]}, {"role": "model", "parts": [{"text": "Done."}]}])
+            row.update(
+                mode="meta",
+                contents=[
+                    {"role": "user", "parts": [{"text": "hi"}]},
+                    {"role": "model", "parts": [{"text": "Done."}]},
+                ],
+            )
             put(c, "runs", row)
         self.app.config["MODEL_API_KEY"] = "test-key"
         follow = self.call(
             "POST",
-            f'agents/{agent["id"]}/runs',
+            f"agents/{agent['id']}/runs",
             {"task": "Make it shorter", "mode": "meta", "follow_up_of": first["id"]},
             key="follow-1",
         )
@@ -272,11 +346,15 @@ class WorkspaceTests(unittest.TestCase):
         for n in range(3):
             run = self.start(agent, f"Write a brief about topic {n}")
             self.drain()
-            row = [r for r in self.call("GET", "leaderboard")["agents"] if r["agent_id"] == agent["id"]][0]
+            row = [
+                r
+                for r in self.call("GET", "leaderboard")["agents"]
+                if r["agent_id"] == agent["id"]
+            ][0]
             self.assertIsNone(row["task_success_rate"])
             self.call(
                 "POST",
-                f'runs/{run["id"]}/outcome',
+                f"runs/{run['id']}/outcome",
                 {"success": n != 2, "comment": "Rated"},
                 key=f"o{n}",
             )
@@ -286,12 +364,19 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(row["result_eligible"])
         self.assertAlmostEqual(row["task_success_rate"], 2 / 3)
         self.assertEqual(row["rated_tasks"], 3)
-        self.assertEqual(board["capability_usage"][0]["capability_id"], "write-document")
+        self.assertEqual(
+            board["capability_usage"][0]["capability_id"], "write-document"
+        )
         self.assertEqual(board["capability_usage"][0]["agents"], 1)
-        self.assertEqual(board["creator_usage"][0], {"creator_id": "shaun", "agents": 1})
+        self.assertEqual(
+            board["creator_usage"][0], {"creator_id": "shaun", "agents": 1}
+        )
         runs = {r["id"]: r for r in self.call("GET", "runs")}
         self.assertTrue(all(r["outcome"] for r in runs.values()))
-        self.assertTrue(self.call("GET", f'runs/{list(runs)[0]}')["outcome"]["success"] in (True, False))
+        self.assertTrue(
+            self.call("GET", f"runs/{list(runs)[0]}")["outcome"]["success"]
+            in (True, False)
+        )
 
 
 if __name__ == "__main__":

@@ -53,13 +53,23 @@ RequiredKey = Annotated[
 
 
 def context(request: Request, actor_id: ActorHeader = "pavan", key: OptionalKey = None):
-    return RequestContext(request, request.app.state.service, actor_id, key)
+    return RequestContext(
+        request,
+        request.app.state.service,
+        request.app.state.auth.actor(request, actor_id),
+        key,
+    )
 
 
 def idempotent_context(
     request: Request, key: RequiredKey, actor_id: ActorHeader = "pavan"
 ):
-    return RequestContext(request, request.app.state.service, actor_id, key)
+    return RequestContext(
+        request,
+        request.app.state.service,
+        request.app.state.auth.actor(request, actor_id),
+        key,
+    )
 
 
 Context = Annotated[RequestContext, Depends(context)]

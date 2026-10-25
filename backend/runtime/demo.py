@@ -18,7 +18,9 @@ LEAD = re.compile(
 
 
 def topic(task):
-    text = LEAD.sub("", task.strip().split("\n")[0], count=1).strip(" .:") or task.strip()
+    text = (
+        LEAD.sub("", task.strip().split("\n")[0], count=1).strip(" .:") or task.strip()
+    )
     text = text[:80].strip()
     return text[:1].upper() + text[1:] if text else "Untitled"
 
@@ -29,27 +31,53 @@ def fragments(task):
     return clean[:12]
 
 
-def outline(task):
+def outline(task, slide_count=None):
     wanted = re.search(r"(\d+)[- ]slide", task, re.I)
-    count = min(max(int(wanted.group(1)) if wanted else 5, 3), 8)
+    count = min(max(slide_count or (int(wanted.group(1)) if wanted else 5), 3), 20)
     name, bits = topic(task), fragments(task)
-    slides = [f"# {name}", "- Overview prepared in demo mode", f"- Request: {task.strip()[:140]}"]
-    middle = ["Why it matters", "Key points", "Options", "Risks and open questions", "Timeline", "Next steps"]
+    slides = [
+        f"# {name}",
+        "- Overview prepared in demo mode",
+        f"- Request: {task.strip()[:140]}",
+    ]
+    middle = [
+        "Why it matters",
+        "Key points",
+        "Options",
+        "Risks and open questions",
+        "Timeline",
+        "Next steps",
+    ]
     for i in range(count - 2):
         title = middle[i] if i < len(middle) else f"Detail {i + 1}"
         chunk = bits[i * 2 : i * 2 + 2] or ["Replace this with your own detail"]
         slides.append(f"# {title}")
         slides.extend(f"- {c[:140]}" for c in chunk)
-    slides += ["# Next steps", "- Review and edit this draft", "- Switch to a live model for original content"]
+    slides += [
+        "# Next steps",
+        "- Review and edit this draft",
+        "- Switch to a live model for original content",
+    ]
     return "\n".join(slides)
 
 
 def document(task):
     name = topic(task)
     bits = fragments(task)
-    lines = [f"# {name}", "", f"This draft was generated in demo mode from your request: {task.strip()[:300]}", "", "# Key points"]
+    lines = [
+        f"# {name}",
+        "",
+        f"This draft was generated in demo mode from your request: {task.strip()[:300]}",
+        "",
+        "# Key points",
+    ]
     lines += [f"- {b[:200]}" for b in bits[:5]] or ["- Add your key points here"]
-    lines += ["", "# Next steps", "- Review and edit this draft.", "- Switch to a live model for original writing."]
+    lines += [
+        "",
+        "# Next steps",
+        "- Review and edit this draft.",
+        "- Switch to a live model for original writing.",
+    ]
     return name, "\n".join(lines)
 
 
@@ -71,11 +99,15 @@ def table(task, fallback=True):
     if groups:
         return "\n".join(max(groups, key=len))[:4000]
     if not fallback:
-        raise Error("Include a CSV table in this job before running analysis in demo mode.", 422, "invalid_request")
+        raise Error(
+            "Include a CSV table in this job before running analysis in demo mode.",
+            422,
+            "invalid_request",
+        )
     return SAMPLE_CSV
 
 
-def workspace_plan(task, names, strict=False):
+def workspace_plan(task, names, strict=False, acceptance=None):
     """Return the tool calls demo mode makes for whichever workspace tools the agent has."""
     queue = []
     if "read_url" in names:
@@ -88,10 +120,38 @@ def workspace_plan(task, names, strict=False):
             )
         queue.append({"name": "read_url", "args": {"url": urls[0].rstrip(".,")}})
     if "analyze_data" in names:
-        queue.append({"name": "analyze_data", "args": {"table": table(task, fallback=not strict), "question": task[:500]}})
+        queue.append(
+            {
+                "name": "analyze_data",
+                "args": {
+                    "table": table(task, fallback=not strict),
+                    "question": task[:500],
+                },
+            }
+        )
     if "create_slideshow" in names:
-        queue.append({"name": "create_slideshow", "args": {"title": topic(task), "outline": outline(task)}})
+        queue.append(
+            {
+                "name": "create_slideshow",
+                "args": {
+                    "title": topic(task),
+                    "outline": outline(task, (acceptance or {}).get("slide_count")),
+                },
+            }
+        )
     if "create_document" in names:
         title, body = document(task)
-        queue.append({"name": "create_document", "args": {"title": title, "body": body}})
+        if strict:
+            sections = (acceptance or {}).get(
+                "required_sections", ["Recommendation", "Risks", "Next steps"]
+            )
+            body += "\n\n" + "\n\n".join(
+                "# "
+                + section
+                + "\nDemo template: review the provided inputs and company rules before making a decision. This section needs manager review; no external action has been taken."
+                for section in sections
+            )
+        queue.append(
+            {"name": "create_document", "args": {"title": title, "body": body}}
+        )
     return queue

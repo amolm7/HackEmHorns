@@ -73,6 +73,21 @@ TOOLS = {
         },
     },
 }
+# Publish the same argument limits enforced by the runtime and MCP server.
+for _tool_name, _tool in TOOLS.items():
+    _schema = _tool["inputSchema"]
+    _schema["additionalProperties"] = False
+    for _field, _property in _schema["properties"].items():
+        _property["maxLength"] = (
+            40000 if (_tool_name, _field) == ("create_document", "body")
+            else 200 if _field == "title"
+            else 100 if _field == "ticket_id"
+            else 2000 if _field == "url"
+            else 4000
+        )
+        if _field in _schema["required"]:
+            _property["minLength"] = 1
+
 SUPPORT_TOOLS = {"search_tickets", "search_docs", "create_draft"}
 SELFTEST_CSV = "item,amount\na,1\nb,2\nc,3"
 CAPS = [
