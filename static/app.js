@@ -23,6 +23,7 @@ const ICONS = {
   reply: ["M9 7L4 12l5 5", "M4 12h9a7 7 0 0 1 7 7v1"],
   tool: ["M14.5 6.5a4 4 0 0 0-5 5L4 17l3 3 5.5-5.5a4 4 0 0 0 5-5l-2.5 2.5-2.5-.5-.5-2.5z"],
   plus: ["M12 5v14", "M5 12h14"],
+  chev: ["M6 9l6 6 6-6"],
   check: ["M5 12.5l4.5 4.5L19 7"],
   x: ["M6 6l12 12", "M18 6L6 18"],
   up: ["M7 11v9H4v-9z", "M7 11l4-7c1.5 0 2.5 1 2.5 2.5V9h5a2 2 0 0 1 2 2.3l-1 6a2 2 0 0 1-2 1.7H7"],
@@ -228,8 +229,18 @@ function stableSidebar(selector, markup) {
     sidebarMarkup.set(selector, markup);
   }
 }
+function agentMenu(a) {
+  const manages = canManage(a);
+  return `<details class="menu agent-menu"><summary aria-label="Options for ${esc(a.name)}" title="Agent options">${icon("more")}</summary><div class="menu-pop">
+          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button>` : ""}
+          ${manages ? `<button data-act="share-agent" data-id="${esc(a.id)}">Share as template</button>` : ""}
+          ${a.status === "active" ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
+          <button data-act="perf" data-id="${esc(a.id)}">About this agent</button>
+          ${canRemove(a) ? `<button class="danger" data-act="archive" data-id="${esc(a.id)}">Delete agent</button>` : ""}</div></details>`;
+}
 function sidebar() {
   stableSidebar("#identity", opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]), user));
+  stableSidebar("#identity-menu", dropdown({ field: "identity", value: user, label: authMode === "password" ? "Signed in account" : "Switch identity", cls: "up" + (authMode === "password" ? " locked" : ""), options: S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]) }));
   const pending = S.approvals.filter(a => a.status === "pending").length + S.proposals.filter(p => p.status === "draft").length, jobs = (S["work-queue"] || []).length;
   // Starting a conversation moves its agent to the top; background completions
   // do not displace the agent the user most recently worked with.
@@ -242,7 +253,25 @@ function sidebar() {
     (lastUsed.get(b.id) || Date.parse(b.created_at) || 0) -
     (lastUsed.get(a.id) || Date.parse(a.created_at) || 0)
   );
-  stableSidebar("#agent-list", recentAgents.length ? recentAgents.map(a => { const st = agentState(a); return `<li><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a></li>`; }).join("") : `<li class="none">No agents yet</li>`);
+  const agentRow = a => { const st = agentState(a); return `<li class="agent-nav-row"><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a>${agentMenu(a)}</li>`; };
+  let agentList;
+  if (S.me.roles.some(r => ["manager", "admin"].includes(r))) {
+    const creators = new Map();
+    for (const agent of recentAgents) {
+      const owner = agent.creator_id || "unknown";
+      if (!creators.has(owner)) creators.set(owner, []);
+      creators.get(owner).push(agent);
+    }
+    const group = (owner, agents, mine = false) => `<li class="agent-owner-group"><h3 class="agent-owner-label">${mine ? "My agents" : esc(owner === "unknown" ? "Unknown creator" : userName(owner))}<span>${agents.length}</span></h3><ul class="agent-owner-list">${agents.map(agentRow).join("") || '<li class="none">No agents created yet</li>'}</ul></li>`;
+    agentList = group(user, creators.get(user) || [], true);
+    creators.delete(user);
+    if (creators.size) agentList += '<li class="agent-team-heading">Team agents · by creator</li>';
+    // Groups follow their most recent agent; agents within each group remain recent-first.
+    agentList += [...creators].map(([owner, agents]) => group(owner, agents)).join("");
+  } else {
+    agentList = recentAgents.map(agentRow).join("") || '<li class="none">No agents yet</li>';
+  }
+  stableSidebar("#agent-list", agentList);
   const managerNav = $("#manager-nav");
   managerNav.hidden = !S.me.roles.some(r => ["manager", "admin"].includes(r));
   stableSidebar("#manager-nav", managerNav.hidden ? "" : `<a class="employees-nav" href="#/employees" data-route="employees">${icon("jobs")}<span><b>Employees</b><small>Team overview & usage</small></span><span aria-hidden="true">↗</span></a>`);
@@ -258,15 +287,32 @@ function sidebarActive() {
 
 /* ---------- creator: drag tools onto the core, say what it should do ---------- */
 const EXAMPLES = { "make-slideshow": "Turn my meeting notes into a 5-slide deck", "write-document": "Write a one-page brief from a few bullet points", "analyze-data": "Find what stands out in a CSV I paste", "research-web": "Summarize the web pages I send it", "schedule-meetings": "Set up a 30-minute kickoff with sam@acme.com next Tuesday at 2pm", "draft-email": "Draft a polite email asking for the signed contract by Friday", "plan-tasks": "Turn my meeting notes into action items with owners" };
+/* In-page dropdown (replaces the native, OS-drawn <select> popup). */
+const dropdown = ({ field, value, options, label, cls = "" }) => {
+  const cur = options.find(o => o[0] === value) || options[0] || ["", ""];
+  return `<details class="menu dd ${cls}" data-dd="${esc(field)}"><summary aria-label="${esc(label)}" aria-haspopup="listbox"><span>${esc(cur[1])}</span>${icon("chev", "sm")}</summary><div class="menu-pop dd-pop" role="listbox" aria-label="${esc(label)}">${options.map(([v, t, off]) => `<button type="button" role="option" aria-selected="${v === value}" data-act="pick" data-field="${esc(field)}" data-value="${esc(v)}" ${off ? "disabled" : ""}><span>${esc(t)}</span>${v === value ? icon("check", "sm") : ""}</button>`).join("")}</div></details>`;
+};
+
+/* Starter instructions: each fills the Instructions box, names the agent and picks its tools. */
+const ROLES = [
+  { id: "atlas", name: "Atlas", title: "Executive Strategist", caps: ["make-slideshow"], text: "Create slides for executives making a decision. Lead with a recommendation, then show supporting evidence, business impact, risks, and next steps. Keep slides concise. Use only supplied facts and label assumptions." },
+  { id: "spark", name: "Spark", title: "Storytelling Coach", caps: ["make-slideshow"], text: "Create slides for an audience learning about a topic. Build a story: problem, why it matters, explanation, example, and takeaway. Use approachable language, visual comparisons, and memorable headlines. Use only supplied facts and label assumptions." },
+  { id: "quill", name: "Quill", title: "Brief Writer", caps: ["write-document"], text: "Write one-page briefs for busy readers. Start with the bottom line, then key points, what is still unknown, and recommended next steps. Plain language, short paragraphs. Use only supplied facts and label assumptions." },
+  { id: "lens", name: "Lens", title: "Data Analyst", caps: ["analyze-data"], text: "Analyze the data I send. Compare groups, point out what stands out, and say what the data cannot tell us. Never claim causes or ROI the data does not show. Finish with two or three plain-language takeaways." },
+  { id: "cadence", name: "Cadence", title: "Meeting Coordinator", caps: ["schedule-meetings"], text: "Set up meetings from short requests. Confirm the title, time, length and attendees, add a short agenda, and prepare the calendar invite. Never send invites yourself. Ask one question if a time or person is missing." },
+  { id: "relay", name: "Relay", title: "Email Drafter", caps: ["draft-email"], text: "Draft clear, polite emails from a few notes. Keep them short, put the ask in the first two sentences, and match the tone I describe. Save every email as a draft. Never claim an email was sent." },
+  { id: "anchor", name: "Anchor", title: "Action Planner", caps: ["plan-tasks"], text: "Turn meeting notes and plans into action items. Give every task an owner and a due date when the notes mention them, and mark anything unclear as to be confirmed. Keep each task to one line." },
+];
+const roleChips = picked => { const ids = picked.map(c => c.id), fits = r => r.caps.some(c => ids.includes(c)); return [...ROLES.filter(fits), ...ROLES.filter(r => !fits(r))].slice(0, 4); };
 function forgeScreen() {
   if (!forge.mode) forge.mode = S["model-profiles"].find(m => m.id !== "demo" && m.enabled)?.id || "demo";
   const work = S.capabilities.filter(c => (c.group || "Workspace") !== "Support sandbox"), extra = S.capabilities.filter(c => c.group === "Support sandbox");
   const picked = forge.caps.map(capById).filter(Boolean), target = forge.target && agentById(forge.target);
   const tool = c => `<button type="button" class="tool ${forge.caps.includes(c.id) ? "used" : ""}" draggable="true" data-act="tool" data-id="${esc(c.id)}" aria-pressed="${forge.caps.includes(c.id)}" title="${esc(c.description)}">${icon(c.icon || "tool")}<span>${esc(short(c))}</span></button>`;
-  const ideas = picked.length ? picked.map(c => EXAMPLES[c.id] || c.example).filter(Boolean) : Object.values(EXAMPLES);
+  const roles = roleChips(picked);
   return `<div class="forge-screen">
     <h1 class="display">${words(target ? "Teach " + target.name + " something new" : "Build an agent")}</h1>
-    <p class="lede">${target ? "Drop a new tool on the core." : "Drag the tools it needs onto the core. Then tell it what to do."}</p>
+    <p class="lede">${target ? "Drop a new tool on the core." : "Drag the tools it needs onto the core. Then write its instructions."}</p>
     <div class="forge">
       <div class="core-zone ${picked.length ? "armed" : ""} p${ui.pulse % 2}" data-drop="core" aria-label="Tools your agent will have">
         <div class="halo"></div>
@@ -277,13 +323,12 @@ function forgeScreen() {
       <div class="belt" role="group" aria-label="Tools. Drag onto the core, or click to add.">${work.map(tool).join("")}${forge.more ? extra.map(tool).join("") : extra.length ? `<button type="button" class="tool ghost" data-act="more-tools">${icon("more")}<span>More</span></button>` : ""}</div>
     </div>
     ${target ? `<p class="note">${perAction() ? "Adding tools resets this agent to asks first. Pending tasks must be restarted." : "New tools apply from the next task. Unfinished tasks must be restarted."}</p><div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${forge.caps.length ? "" : "disabled"}>Add to ${esc(target.name)}</button></div>` : `<div class="ask-box">
-      <label class="sr-only" for="forge-text">What should it do?</label>
-      <textarea id="forge-text" data-draft="forge-text" rows="1" placeholder="What should it do?">${esc(forge.text)}</textarea>
-      <div class="ideas">${ideas.slice(0, 3).map(t => `<button type="button" class="idea" data-act="idea" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+      <textarea id="forge-text" data-draft="forge-text" rows="4" aria-label="Instructions for your agent" placeholder="Describe the job. For example: Create slides for executives making a decision. Lead with a recommendation, then evidence, risks and next steps. Use only the facts I give you.">${esc(forge.text)}</textarea>
+      <div class="starters" role="group" aria-label="Start from an example"><p class="note">Start from an example</p><div class="starter-grid">${roles.map(r => `<button type="button" class="starter" data-act="role" data-id="${esc(r.id)}" title="${esc(r.text)}"><b>${esc(r.name)}</b><span>${esc(r.title)}</span></button>`).join("")}</div></div>
       <div class="ask-row">
-        <label class="pill-select" title="Set once. The agent always uses this model."><span class="sr-only">Model, set once for this agent</span><select data-draft="forge-mode">${opts(S["model-profiles"].map(m => [m.id, m.id === "demo" ? "Demo model" : m.name + (m.enabled ? "" : " (needs key)"), !m.enabled]), forge.mode)}</select></label>
-        <label class="name-field"><span class="sr-only">Name</span><input data-draft="forge-name" value="${esc(forge.name)}" placeholder="Name (optional)" maxlength="100"></label>
-        <button class="btn primary" data-act="create" ${canHire() ? "" : "disabled"}>Create agent</button>
+        <span class="model-pick" title="Set once. The agent always uses this model.">${dropdown({ field: "forge-mode", value: forge.mode, label: "Model, set once for this agent", options: S["model-profiles"].map(m => [m.id, m.id === "demo" ? "Demo model" : m.name + (m.enabled ? "" : " (needs key)"), !m.enabled]) })}</span>
+        <label class="name-field"><span class="sr-only">Agent name (required)</span><input data-draft="forge-name" value="${esc(forge.name)}" placeholder="Name your agent" maxlength="100" required autocomplete="off"></label>
+        <button class="btn primary" data-act="create" ${canHire() && forge.name.trim() ? "" : "disabled"} title="${forge.name.trim() ? "" : "Name your agent first"}">Create agent</button>
       </div>
     </div>`}
     ${canHire() ? "" : `<p class="note">Your role can't create agents. Switch to a manager or builder at the bottom left.</p>`}
@@ -426,12 +471,7 @@ function chatScreen(id) {
       <div class="who">${orb(a.id, { size: 32, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<div><h1>${esc(a.name)}</h1><p>${caps.map(short).map(esc).join(" · ")} · ${esc(modelLabel(a.model_profile_id))}</p></div></div>
       <div class="row">
         ${perAction() ? `<button class="switch" role="switch" aria-checked="${!alone(a)}" data-act="mode" data-id="${esc(a.id)}" data-level="${alone(a) ? "intern" : "associate"}" ${manages ? "" : "disabled"}><span class="track"><span class="thumb"></span></span><span class="lbl">Ask before acting</span></button>` : ""}
-        <details class="menu"><summary aria-label="More options">${icon("more")}</summary><div class="menu-pop">
-          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button>` : ""}
-          ${manages ? `<button data-act="share-agent" data-id="${esc(a.id)}">Share as template</button>` : ""}
-          ${a.status === "active" ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
-          <button data-act="perf" data-id="${esc(a.id)}">About this agent</button>
-          ${canRemove(a) ? `<button class="danger" data-act="archive" data-id="${esc(a.id)}">Delete agent</button>` : ""}</div></details>
+
       </div>
     </header>
     ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming stops any unfinished task.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
@@ -557,7 +597,8 @@ function jobItem(w) {
 /* ---------- atomic create flow ---------- */
 async function createAgent() {
   const target = forge.target && agentById(forge.target);
-  if (!forge.caps.length && !forge.text.trim()) throw Error("Choose a tool or describe the job.");
+  if (!forge.caps.length && !forge.text.trim()) throw Error("Add instructions or choose a tool.");
+  if (!target && !forge.name.trim()) throw Error("Name your agent.");
   if (target) {
     const a = await api(`agents/${target.id}/capabilities`, "POST", { capability_ids: forge.caps, expected_spec_version: target.spec_version });
     forge = forge0(); location.hash = "#/agent/" + a.id;
@@ -590,6 +631,17 @@ document.addEventListener("click", e => {
   const { act: kind, id } = b.dataset;
   if (kind === "tool") toggleTool(id);
   if (kind === "more-tools") { forge.more = true; render(); }
+  if (kind === "role") {
+    const r = ROLES.find(x => x.id === b.dataset.id); if (!r) return;
+    forge.text = r.text; forge.caps = [...new Set([...forge.caps, ...r.caps.filter(capById)])];
+    if (!forge.name.trim() || ROLES.some(x => x.name === forge.name)) forge.name = r.name;
+    ui.pulse++; render(); const t = $("#forge-text"); if (t) { grow(t); t.focus(); }
+  }
+  if (kind === "pick") {
+    const v = b.dataset.value;
+    if (b.dataset.field === "forge-mode") { forge.mode = v; render(); }
+    if (b.dataset.field === "identity") { const sel = $("#identity"); if (sel && sel.value !== v) { sel.value = v; sel.dispatchEvent(new Event("change", { bubbles: true })); } b.closest("details")?.removeAttribute("open"); }
+  }
   if (kind === "idea") { forge.text = b.dataset.text; render(); const t = $("#forge-text"); if (t) { grow(t); t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
   if (kind === "create") act(createAgent, b);
   if (kind === "confirm-draft") act(async () => { const a = await api(`recruiter/proposals/${id}/confirm`, "POST", { revision: Number(b.dataset.rev) }); ui.fresh = a.id; location.hash = "#/agent/" + a.id; return null; }, b);
@@ -598,6 +650,11 @@ document.addEventListener("click", e => {
   if (kind === "mode") { const a = agentById(id); if (a) act(async () => { await api(`agents/${id}/level`, "POST", { level: b.dataset.level, reason: "Switched from the agent page." }); return b.dataset.level === "intern" ? `${a.name} will ask before every action.` : `${a.name} now works on its own for reads and saves.`; }, b); }
   if (kind === "example") { ui.drafts[id] = b.dataset.text; render(); const t = $("[data-draft='run']"); if (t) { grow(t); t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
   if (kind === "new-thread") act(async () => { await api(`agents/${id}/conversations`, "POST", {}); return "Your next message starts a new conversation."; }, b);
+  if (["rename", "archive", "perf", "new-thread"].includes(kind) && b.closest(".agent-menu")) {
+    b.closest("details")?.removeAttribute("open");
+    location.hash = "#/agent/" + id;
+    document.body.classList.remove("side-open");
+  }
   if (kind === "rename" || kind === "archive") {
     b.closest("details")?.removeAttribute("open");
     ui.rename = kind === "rename" ? id : null; ui.archive = kind === "archive" ? id : null;
@@ -679,7 +736,7 @@ function grow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHe
 document.addEventListener("input", e => {
   const t = e.target.dataset?.draft; if (!t) return;
   if (t === "forge-text") { forge.text = e.target.value; grow(e.target); }
-  if (t === "forge-name") forge.name = e.target.value;
+  if (t === "forge-name") { forge.name = e.target.value; const go = $("[data-act='create']"); if (go && !forge.target) { go.disabled = !(canHire() && forge.name.trim()); go.title = forge.name.trim() ? "" : "Name your agent first"; } }
   if (t === "run") { ui.drafts[e.target.dataset.id] = e.target.value; grow(e.target); }
   if (t === "repository") ui.repositories[e.target.dataset.id] = e.target.value;
   if (t === "new-tool-name") ui.newTool.name = e.target.value;
@@ -693,7 +750,7 @@ document.addEventListener("change", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches?.("textarea[data-draft='run']")) { e.preventDefault(); e.target.form.requestSubmit(); }
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches?.("#forge-text")) { e.preventDefault(); $("[data-act='create']")?.click(); }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches?.("#forge-text")) { e.preventDefault(); if (forge.name.trim()) $("[data-act='create']")?.click(); else $("[data-draft='forge-name']")?.focus(); }
   if (e.key === "Escape") { $$("details.menu[open]").forEach(d => d.removeAttribute("open")); document.body.classList.remove("side-open"); }
 });
 document.addEventListener("click", e => { $$("details.menu[open]").forEach(d => { if (!d.contains(e.target)) d.removeAttribute("open"); }); });

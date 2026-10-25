@@ -4,6 +4,8 @@
 
 This review covers the current working tree, including the uncommitted GitHub integration and manager-permission changes. The last committed revision at review time was `b4f0551`; checking out that revision alone will not reproduce this implementation. See ISS-012 before handing this work to someone on another computer.
 
+**Handoff update:** the implementation and this backlog were committed as `fca2311` on `fix/library-custom-tools`. The feature branch includes `origin/main` at `b6b38bc` as its integration baseline. ISS-012's missing-file/commit prerequisite is addressed by that commit; the issue descriptions below retain the original scan baseline.
+
 The request was to investigate and prepare a backlog. These tickets describe open work, not fixes implemented by this review. Do not mark a ticket complete because the existing tests pass.
 
 ## Findings that matter first
@@ -50,7 +52,7 @@ No new paid model calls, live GitHub reads, load tests, independent penetration 
 - **Code-confirmed:** a specific current code path establishes the behavior, but the full user scenario was not exercised live.
 - **Design limitation:** intentional/bounded prototype behavior that needs a product or deployment decision; not an allegation of an exploited vulnerability.
 
-All tickets below are **open**. Suggested owners identify engineering responsibilities, not assignments to specific teammates.
+All tickets below are **open** except the commit/package prerequisite in ISS-012, addressed in the handoff update above. Suggested owners identify engineering responsibilities, not assignments to specific teammates.
 
 ## Backlog index
 
