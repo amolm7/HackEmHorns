@@ -227,3 +227,10 @@ For the local demo team, run `.venv/bin/python scripts/configure_team.py`: Pavan
 - Agents record `creator_id` (who asked for it) and `approved_by` (who confirmed it).
 - `DELETE /agents/{id}` may be called by the creator, the assigned manager or an admin.
 - Default `approval_scope` comes from `APPROVAL_SCOPE` (default `agent`) when a policy has none.
+
+
+### Job-specific setup instructions
+
+Quick creation uses the selected live model to tailor instructions when a `description` is supplied, even when `capability_ids` is already selected. The setup prompt receives the job and the exact selected capability IDs; the selected IDs remain authoritative if the model suggests other tools. The original description is preserved as `job_description`.
+
+Skill-only creation remains deterministic. In demo mode, the job is included in the default instructions without a model call; demo execution itself still follows fixed workflows. Provider failures roll back creation rather than silently substituting generic instructions. Existing agents are unchanged; this behavior applies to new agents.

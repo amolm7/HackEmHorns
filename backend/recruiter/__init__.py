@@ -109,15 +109,23 @@ def unique_name(c, actor, base):
     return candidate
 
 
-def default_instructions(caps):
+def default_instructions(caps, job_description=None):
     if all(c.get("group") == "Support sandbox" for c in caps):
-        return SUPPORT_INSTRUCTIONS
-    names = ", ".join(c["name"].lower() for c in caps)
-    return (
-        f"You are a capable assistant with these capabilities: {names}. Do the user's task with your tools instead of describing what you would do. "
-        "Ask one short clarifying question only when you cannot proceed without the answer. Cite any pages you read. "
-        "Saving a deck or document only saves it in the workspace; never claim you sent or published anything."
-    )
+        instructions = SUPPORT_INSTRUCTIONS
+    else:
+        names = ", ".join(c["name"].lower() for c in caps)
+        instructions = (
+            f"You are a capable assistant with these capabilities: {names}. Do the user's task with your tools instead of describing what you would do. "
+            "Ask one short clarifying question only when you cannot proceed without the answer. Cite any pages you read. "
+            "Saving a deck or document only saves it in the workspace; never claim you sent or published anything."
+        )
+    if job_description:
+        instructions += (
+            "\n\nAssigned job: " + job_description
+            + "\nAdapt the content, audience, tone and output structure to this job, within your approved skills and company rules. "
+            "Do not invent missing company facts, metrics or requirements."
+        )
+    return instructions
 
 
 def conversation(c, actor):
@@ -163,6 +171,12 @@ def message(c, app, actor, id, data):
     parsed = {}
     provider = "guided"
     if mode != "demo":
+        # Resolve explicit selections before sending anything to the setup model.
+        selected = data.get("capability_ids")
+        if selected is not None:
+            require(isinstance(selected, list) and 0 < len(selected) <= 10, "Choose 1–10 capability IDs.")
+            for cap_id in selected:
+                capability(c, actor, cap_id)
         content, _ = model.generate(
             app.config,
             [
@@ -174,6 +188,8 @@ def message(c, app, actor, id, data):
                                 {
                                     "conversation": conv["messages"],
                                     "current_draft": previous,
+                                    "selected_capability_ids": selected,
+                                    "job_description": data.get("job_description"),
                                 }
                             )
                         }
@@ -184,7 +200,7 @@ def message(c, app, actor, id, data):
             + "; ".join(
                 f"{x['id']} ({x['description']})" for x in list_catalog(c, actor)
             )
-            + ". Return JSON with name, job_description, instructions, capability_ids (array of catalog IDs), and kind (hire or capability). Only use capability to add tools when a target_agent_id has been explicitly supplied by the application. Do not invent connections, permissions, roles, departments or managers. Never claim a test or hire occurred. No GitHub, email sending or other external integrations are connected.",
+            + ". Tailor the instructions to the described job: define its purpose, audience, content priorities, tone, and expected output when supplied. Do not simply repeat the tool descriptions or invent unspecified business details. When selected_capability_ids is supplied, keep exactly those capabilities; the job description does not grant extra tools or permissions. Return JSON with name, job_description, instructions, capability_ids (array of catalog IDs), and kind (hire or capability). Only use capability to add tools when a target_agent_id has been explicitly supplied by the application. Do not invent connections, permissions, roles, departments or managers. Never claim a test or hire occurred. No GitHub, email sending or other external integrations are connected.",
             structured=True,
             provider=mode,
         )
@@ -233,14 +249,14 @@ def message(c, app, actor, id, data):
         "name": data.get("name")
         or previous.get("name")
         or unique_name(c, actor, parsed.get("name") or default_name(chosen)),
-        "job_description": parsed.get("job_description")
-        or data.get("job_description")
+        "job_description": data.get("job_description")
+        or parsed.get("job_description")
         or previous.get("job_description")
         or msg,
         "instructions": parsed.get("instructions")
         or data.get("instructions")
         or previous.get("instructions")
-        or default_instructions(chosen),
+        or default_instructions(chosen, data.get("job_description")),
         "department_id": data.get("department_id")
         or previous.get("department_id")
         or (target["department_id"] if target else None),
@@ -481,8 +497,15 @@ def quick_create(c, app, actor, data):
             actor["id"] if set(actor["roles"]) & {"admin", "manager"} else "pavan"
         ),
         "model_profile_id": data.get("model_profile_id", "demo"),
-        "mode": "demo" if data.get("capability_ids") else data.get("model_profile_id", "demo"),
+        # A written job needs tailoring even when skills were selected explicitly.
+        # Skill-only creation stays deterministic and makes no unnecessary model call.
+        "mode": (
+            "demo" if data.get("capability_ids") and not data.get("description")
+            else data.get("model_profile_id", "demo")
+        ),
     }
+    if data.get("description"):
+        payload["job_description"] = data["description"]
     for key in ("name", "capability_ids"):
         if data.get(key):
             payload[key] = data[key]

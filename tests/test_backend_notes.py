@@ -68,6 +68,54 @@ class BackendNotesTests(unittest.TestCase):
                 r = self.post(f'approvals/{a["id"]}/decision', {"decision": "approve"})
                 self.assertEqual(r.status_code, 200, r.text)
 
+    def test_selected_skills_and_job_are_used_for_live_instruction_tailoring(self):
+        job = "Make executive update slides focused on metrics, risks and decisions."
+        tailored = "Prepare executive updates. Lead with the decision needed, then metrics and risks. Use only supplied figures."
+        response = {"name": "Executive updates", "job_description": "Model summary", "instructions": tailored,
+                    "capability_ids": ["make-slideshow", "draft-email"], "kind": "hire"}
+        with patch("backend.runtime.model.generate", return_value=({"parts": [{"text": json.dumps(response)}]}, {})) as generate:
+            result = self.post("agents/quick-create", {
+                "capability_ids": ["make-slideshow"], "description": job, "model_profile_id": "meta",
+            })
+        self.assertEqual(result.status_code, 200, result.text)
+        agent = result.json()["agent"]
+        self.assertEqual(agent["instructions"], tailored)
+        self.assertEqual(agent["job_description"], job)
+        self.assertEqual([b["capability_id"] for b in agent["bindings"]], ["make-slideshow"])
+        self.assertEqual(generate.call_count, 1)
+        prompt = json.loads(generate.call_args.args[1][0]["parts"][0]["text"])
+        self.assertEqual(prompt["selected_capability_ids"], ["make-slideshow"])
+        self.assertEqual(prompt["job_description"], job)
+        self.assertIn("Tailor the instructions", generate.call_args.args[2])
+        self.assertEqual(generate.call_args.kwargs["provider"], "meta")
+
+    def test_demo_job_is_preserved_in_instructions_without_a_model_call(self):
+        job = "Create sales pitches for small-business customers, focused on customer pain and next steps."
+        with patch("backend.runtime.model.generate") as generate:
+            agent = self.quick(["make-slideshow"], description=job)
+        generate.assert_not_called()
+        self.assertIn(job, agent["instructions"])
+        self.assertIn("approved skills and company rules", agent["instructions"])
+        self.assertEqual(agent["job_description"], job)
+
+    def test_skill_only_creation_does_not_need_a_setup_model(self):
+        with patch("backend.runtime.model.generate") as generate:
+            agent = self.quick(["make-slideshow"], model_profile_id="meta")
+        generate.assert_not_called()
+        self.assertEqual(agent["model_profile_id"], "meta")
+
+    def test_tailoring_failure_rolls_back_instead_of_silently_using_generic_instructions(self):
+        from backend.contracts import Error
+        with self.app.db.transaction() as c:
+            before = {t: len(all_rows(c, t)) for t in ["agents", "proposals", "conversations"]}
+        with patch("backend.runtime.model.generate", side_effect=Error("Provider unavailable", 502, "provider_error")):
+            result = self.post("agents/quick-create", {
+                "capability_ids": ["make-slideshow"], "description": "Prepare executive updates", "model_profile_id": "meta",
+            })
+        self.assertEqual(result.status_code, 502)
+        with self.app.db.transaction() as c:
+            self.assertEqual(before, {t: len(all_rows(c, t)) for t in before})
+
     def test_atomic_creation_replay_defaults_and_rollback(self):
         body = {"capability_ids": ["write-document", "make-slideshow"]}
         first = self.post("agents/quick-create", body, key="quick")
