@@ -63,6 +63,8 @@ b{font-weight:600}
 .side-list .count{font-size:12px;color:var(--faint)}.side-list .count.warn{color:var(--warn);font-weight:700}
 .links{padding-top:10px;margin-top:6px;border-top:1px solid var(--line)}
 .links .ic{width:16px;height:16px}
+.identity-wrap{margin-top:10px}
+.native-hidden{position:absolute!important;width:1px!important;height:1px!important;margin:0!important;padding:0!important;opacity:0;pointer-events:none;overflow:hidden}
 .identity select{width:100%;margin-top:10px;height:34px;padding:0 10px;font:inherit;font-size:12.5px;color:var(--dim);background:transparent;border:1px solid var(--line);border-radius:10px}
 .menu-btn,.scrim{display:none}
 main{margin-left:var(--side);min-height:100svh;padding:0 28px}
@@ -158,10 +160,28 @@ body.dragging .halo{animation-duration:1.6s}
 .belt{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;max-width:640px}
 .ask-box{width:100%;max-width:640px;margin-top:40px;display:flex;flex-direction:column;gap:16px}
 .ask-box textarea{min-height:56px;padding:12px 4px;font-size:clamp(17px,2vw,20px);text-align:center;background:transparent;border:0;border-bottom:1px solid var(--line-2);border-radius:0;resize:none}
+.ask-box textarea#forge-text{min-height:132px;padding:18px 20px;font-size:16.5px;line-height:1.6;text-align:left;color:var(--ink);background:rgba(255,255,255,.04);border:1px solid var(--line-2);border-radius:18px;box-shadow:0 18px 40px -26px rgba(0,0,0,.9) inset,0 1px 0 rgba(255,255,255,.04);transition:border-color .2s ease,background-color .2s ease,box-shadow .2s ease}
+.ask-box textarea#forge-text::placeholder{color:var(--faint)}
+.ask-box textarea#forge-text:focus{border-color:rgba(191,239,255,.5);background:rgba(255,255,255,.06);box-shadow:0 0 0 4px rgba(191,239,255,.08)}
+.starters{display:flex;flex-direction:column;gap:10px}
+.starters .note{margin:0;text-align:left;font-size:13px}
+.starter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.starter{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;padding:12px 16px;font:inherit;text-align:left;cursor:pointer;background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:14px;transition:background-color .2s ease,border-color .2s ease,transform .16s var(--ease-out)}
+.starter b{font-size:14.5px;font-weight:600;color:var(--ink)}
+.starter span{font-size:13px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.starter:hover{background:rgba(255,255,255,.075);border-color:var(--line-2)}
+.starter:active{transform:scale(.98)}
+.starter:focus-visible,.dd>summary:focus-visible{outline:2px solid rgba(191,239,255,.6);outline-offset:2px}
+.ask-row{gap:12px}
+.model-pick{display:inline-flex;flex:none}
+.name-field input{height:42px;width:200px;padding:0 18px;font-size:14.5px;text-align:left;border-radius:999px}
+.name-field input:placeholder-shown{border-color:rgba(191,239,255,.28)}
+.ask-row .btn.primary{height:42px;padding:0 22px}
+.ask-row .btn.primary:disabled{opacity:.45;cursor:not-allowed}
+@media (max-width:560px){.starter-grid{grid-template-columns:1fr}.name-field input{width:100%}.name-field{flex:1 1 100%}}
 .ask-box textarea:focus{background:transparent;border-bottom-color:rgba(191,239,255,.6)}
-.ask-row{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px}
+.ask-row{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:12px}
 .ask-row.center{margin-top:28px}
-.name-field input{height:38px;width:170px;font-size:13.5px;border-radius:999px;text-align:center}
 .forge-screen>.note{margin-top:16px}
 
 /* ---------- chat ---------- */
@@ -479,6 +499,25 @@ body.dragging .halo{animation-duration:1.6s}
 .about.danger-zone{box-shadow:inset 0 0 0 1px rgba(255,140,140,.35)}
 .model-chip{display:inline-flex;align-items:center;height:30px;padding:0 12px;font-size:13px;color:var(--dim);background:rgba(255,255,255,.05);border-radius:999px;cursor:default}
 .model-chip.off{color:#ffc073;background:rgba(255,192,115,.1)}
+/* in-page dropdown (kept last so it wins over the generic .menu rules) */
+.dd{position:relative}
+.menu.dd>summary{display:inline-flex;align-items:center;justify-content:space-between;gap:10px;width:auto;height:42px;padding:0 14px 0 18px;white-space:nowrap;flex:none;font-size:14px;color:var(--ink);background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:999px}
+.menu.dd>summary:hover,.menu.dd[open]>summary{background:rgba(255,255,255,.085);color:var(--ink)}
+.dd>summary .ic{width:14px;height:14px;opacity:.7;transition:transform .2s var(--ease-out)}
+.dd[open]>summary .ic{transform:rotate(180deg)}
+.menu-pop.dd-pop{left:0;right:auto;top:48px;min-width:100%;width:max-content;max-width:300px;transform-origin:top left;animation:dd-in .16s var(--ease-out)}
+.dd-pop button{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.dd-pop button[aria-selected="true"]{background:rgba(191,239,255,.09)}
+.dd-pop button:disabled{opacity:.4;cursor:not-allowed}
+.dd-pop .ic{width:14px;height:14px;color:var(--ice)}
+.dd.up .menu-pop.dd-pop{top:auto;bottom:44px}
+.menu.dd.up>summary{display:flex;width:100%;height:36px;padding:0 10px 0 12px;font-size:12.5px;color:var(--dim);background:transparent;border-radius:10px}
+.menu.dd.up>summary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dd.up .menu-pop.dd-pop{min-width:100%;width:max-content;max-width:calc(var(--side,250px) - 16px)}
+.menu.dd.locked>summary{pointer-events:none;opacity:.75}
+.menu.dd.locked>summary .ic{display:none}
+@keyframes dd-in{from{opacity:0;transform:translateY(-4px) scale(.97)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.menu-pop.dd-pop{animation:none}.dd>summary .ic{transition:none}}
 
 /* Agent controls stay beside their sidebar conversation. Menus expand within
    the scroll region so even the last agent's controls remain reachable. */

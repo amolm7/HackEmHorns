@@ -20,7 +20,7 @@
   <p class="side-label">Agents</p>
   <ul class="side-list" id="agent-list"></ul>
   <ul class="side-list links" id="side-links"></ul>
-  <label class="identity"><span class="sr-only">Signed in as (local development identity)</span><select id="identity"></select></label>
+  <div class="identity-wrap"><label class="identity"><span class="sr-only">Signed in as (local development identity)</span><select id="identity" class="native-hidden" tabindex="-1" aria-hidden="true"></select></label><div id="identity-menu"></div></div>
   <div id="side-resize" class="side-resize" role="separator" tabindex="0" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="420" aria-valuenow="250" title="Drag to resize · double-click to reset"></div>
 </aside>
 <button class="menu-btn" id="menu-btn" aria-label="Open menu" aria-controls="side"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></svg></button>
