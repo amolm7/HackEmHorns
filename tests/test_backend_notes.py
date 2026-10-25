@@ -12,13 +12,14 @@ from backend.app import Application
 from backend.api.application import create_app
 from backend.api.runtime import activity_events
 from backend.db import all_rows, get, put
+from tests.test_workspace import use_model
 
 
 class BackendNotesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "notes.db"
-        self.app = Application(self.path, {"MODEL_API_KEY": "test-only"})
+        self.app = Application(self.path, {"MODEL_API_KEY": "test-only", "APPROVAL_SCOPE": "action"})
         self.client = TestClient(create_app(self.app, start_worker=False), base_url="http://localhost")
         self.client.__enter__()
 
@@ -54,6 +55,8 @@ class BackendNotesTests(unittest.TestCase):
         return r.json()["agent"]
 
     def task_run(self, agent, user="pavan", **extra):
+        if extra.get("mode"):
+            use_model(self.app, agent["id"], extra["mode"])
         r = self.post(f'agents/{agent["id"]}/runs', {"task": "Write a brief about a launch", **extra}, user=user)
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()

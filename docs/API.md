@@ -31,7 +31,7 @@ Required `Idempotency-Key` header on proposal confirmation, marketplace install,
 | GET | `/connections` | Authorized metadata; secret references removed |
 | PATCH | `/connections/{id}` | Admin; `{ "active": false }`; revocation affects pending execution |
 | GET | `/policy` | Current organization's approval policy and revision |
-| PATCH | `/policy` | Admin; `{ "require_all_approvals": true }`; increments policy revision |
+| PATCH | `/policy` | Admin; `{ "require_all_approvals": true }` and/or `{ "approval_scope": "agent" \| "action" }`; increments policy revision. `agent` (default): actions of an approved agent run without per-action review. `action`: Interns ask before every action and anything with outside effects waits. |
 
 Sandbox connection `support-local` permits Support only. Creating a new department does not grant it tools or connections.
 
@@ -220,3 +220,10 @@ Job results include `quality` (`passed`, individual checks, limits), artifacts, 
 `GET /employees` requires manager/admin access. Returns department-scoped employees, their created agents and existing quality scores, run counts by executing employee, completed/failed counts, last task time, and provider-reported token totals. Task volume ranking does not imply quality or measured time savings. Prompts, credentials, and artifact contents are excluded.
 
 For the local demo team, run `.venv/bin/python scripts/configure_team.py`: Pavan becomes a builder (employee), Shaun becomes manager/builder for both departments, and agents previously assigned to Pavan move to Shaun. Existing passwords are unchanged. Shaun needs his own provisioned account using `scripts/create_user.py`. This explicit setup does not alter default test fixtures.
+
+## Agent controls (agent-level approval release)
+
+- `POST /agents/{id}/runs` uses the agent's `model_profile_id`. Omit `mode`, or send the same value; any other value returns 409 `model_fixed`. Work-queue assignment follows the same rule.
+- Agents record `creator_id` (who asked for it) and `approved_by` (who confirmed it).
+- `DELETE /agents/{id}` may be called by the creator, the assigned manager or an admin.
+- Default `approval_scope` comes from `APPROVAL_SCOPE` (default `agent`) when a policy has none.

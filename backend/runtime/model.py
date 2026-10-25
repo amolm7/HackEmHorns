@@ -15,10 +15,20 @@ def provider_error(provider, exc):
         retry_after = min(60, max(0, int(exc.headers.get("Retry-After", "0"))))
     except (AttributeError, TypeError, ValueError):
         pass
+    detail = ""
     if isinstance(exc, urllib.error.HTTPError):
+        # Providers explain validation failures in the response body. Keep a short, single-line
+        # excerpt so a 400 is diagnosable; request headers (and the key) are never included.
+        try:
+            body = json.loads(exc.read(4000).decode("utf-8", "replace"))
+            error = body[0]["error"] if isinstance(body, list) else body.get("error", body)
+            detail = str(error.get("message", "") if isinstance(error, dict) else error)
+        except Exception:
+            detail = ""
+        detail = re.sub(r"\s+", " ", detail).strip()[:240]
         exc.close()
     message = (
-        f"{provider} returned HTTP {status}."
+        f"{provider} returned HTTP {status}" + (f": {detail}" if detail else ".")
         if status
         else f"{provider} could not be reached."
     )
@@ -30,9 +40,28 @@ def provider_error(provider, exc):
     )
 
 
+GEMINI_SCHEMA_KEYS = {"type", "description", "properties", "required", "enum", "items", "format", "nullable"}
+
+
+def gemini_schema(schema):
+    """Gemini accepts an OpenAPI subset for function parameters and rejects unknown fields with HTTP 400
+    (for example additionalProperties). Length limits are still enforced by the tool server."""
+    if isinstance(schema, list):
+        return [gemini_schema(x) for x in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {}
+    for key, value in schema.items():
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {name: gemini_schema(sub) for name, sub in value.items()}
+        elif key in GEMINI_SCHEMA_KEYS:
+            out[key] = gemini_schema(value)
+    return out
+
+
 def gemini_generate(config, contents, instruction, tools=None, structured=False):
     key = config.get("GEMINI_API_KEY", "")
-    model = config.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = config.get("GEMINI_MODEL", "gemini-3.8-flash")
     require(
         bool(key),
         "Set GEMINI_API_KEY in .env and restart for live Gemini.",
@@ -50,7 +79,7 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
             {
                 "functionDeclarations": [
                     {k: t[k] for k in ["name", "description"]}
-                    | {"parameters": t["inputSchema"]}
+                    | {"parameters": gemini_schema(t["inputSchema"])}
                     for t in tools
                 ]
             }

@@ -75,6 +75,7 @@ async function load() {
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
   if (authMode === "password") { user = S.me.id; $("#identity").disabled = true; if (!$("#sign-out")) { const b = document.createElement("button"); b.id = "sign-out"; b.className = "btn small"; b.textContent = "Sign out"; b.setAttribute("aria-label", "Sign out"); b.addEventListener("click", async () => { await api("auth/logout", "POST", {}); location.reload(); }); $("#identity").closest("label").after(b); } }
   S.employees = S.me.roles.some(r => ["manager", "admin"].includes(r)) ? await api("employees") : null;
+  S.policy = await api("policy").catch(() => ({ approval_scope: "agent" }));
   S.approvals = await api("approvals").catch(() => []);
   S.proposals = await api("recruiter/proposals").catch(() => []);
   if (route().name === "agent") await loadSteps();
@@ -157,11 +158,17 @@ const canManage = a => !!a && (a.manager_id === user || S.me.roles.includes("adm
 const profile = id => S["model-profiles"].find(m => m.id === id);
 const modelLabel = id => (id === "demo" ? "Demo" : profile(id)?.name || id);
 const alone = a => a.level !== "intern";
+/* "agent": a manager approves each agent once, when it is created; its tasks then run without per-action review. */
+const perAction = () => S.policy?.approval_scope === "action";
+const canRemove = a => !!a && (canManage(a) || a.creator_id === user);
+const abilities = a => capsOf(a).map(c => c.name.toLowerCase());
 const defaultDept = () => S.me.department_ids[0] || "support";
 const defaultManager = () => isManager() ? user : (S.me.manager_id || S["dev/users"].find(u => u.roles.includes("manager") && u.department_ids.includes(defaultDept()))?.id);
 const capsOf = a => (a.bindings.length ? a.bindings.map(b => b.capability_id) : (a.required_capabilities || []).map(c => c.id)).map(id => capById(id)).filter(Boolean);
 const TOOL_VERB = { create_slideshow: "build a slideshow", create_document: "write a document", analyze_data: "analyze your data", read_url: "read a web page", search_tickets: "search support tickets", search_docs: "search help documents", create_draft: "save a reply draft", schedule_meeting: "schedule a meeting", draft_email: "draft an email", create_task_list: "make a task list" };
-const RISK = { read: "reads only", local_write: "saves in your workspace", always_approve: "always asks" };
+const RISK_ACTION = { read: "reads only", local_write: "saves in your workspace", always_approve: "always asks" };
+const RISK_AGENT = { read: "reads only", local_write: "saves in your workspace", always_approve: "saves a draft, never sends" };
+const RISK = new Proxy({}, { get: (_, k) => (perAction() ? RISK_ACTION : RISK_AGENT)[k] });
 const SHORT = { "make-slideshow": "Slides", "write-document": "Documents", "analyze-data": "Data", "research-web": "Web research", "ticket-search": "Tickets", "help-docs": "Help docs", "reply-drafts": "Reply drafts", "schedule-meetings": "Meetings", "draft-email": "Email", "plan-tasks": "Tasks" };
 const short = c => SHORT[c.id] || c.name;
 const opts = (list, sel) => list.map(([v, t, dis]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""} ${dis ? "disabled" : ""}>${esc(t)}</option>`).join("");
@@ -267,18 +274,18 @@ function forgeScreen() {
       </div>
       <div class="belt" role="group" aria-label="Tools. Drag onto the core, or click to add.">${work.map(tool).join("")}${forge.more ? extra.map(tool).join("") : extra.length ? `<button type="button" class="tool ghost" data-act="more-tools">${icon("more")}<span>More</span></button>` : ""}</div>
     </div>
-    ${target ? `<p class="note">Adding tools resets this agent to asks first. Pending tasks must be restarted.</p><div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${forge.caps.length ? "" : "disabled"}>Add to ${esc(target.name)}</button></div>` : `<div class="ask-box">
+    ${target ? `<p class="note">${perAction() ? "Adding tools resets this agent to asks first. Pending tasks must be restarted." : "New tools apply from the next task. Unfinished tasks must be restarted."}</p><div class="ask-row center"><a class="btn ghost" href="#/agent/${esc(target.id)}">Cancel</a><button class="btn primary" data-act="create" ${forge.caps.length ? "" : "disabled"}>Add to ${esc(target.name)}</button></div>` : `<div class="ask-box">
       <label class="sr-only" for="forge-text">What should it do?</label>
       <textarea id="forge-text" data-draft="forge-text" rows="1" placeholder="What should it do?">${esc(forge.text)}</textarea>
       <div class="ideas">${ideas.slice(0, 3).map(t => `<button type="button" class="idea" data-act="idea" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>
       <div class="ask-row">
-        <label class="pill-select"><span class="sr-only">Model</span><select data-draft="forge-mode">${opts(S["model-profiles"].map(m => [m.id, m.id === "demo" ? "Demo model" : m.name + (m.enabled ? "" : " (needs key)"), !m.enabled]), forge.mode)}</select></label>
+        <label class="pill-select" title="Set once. The agent always uses this model."><span class="sr-only">Model, set once for this agent</span><select data-draft="forge-mode">${opts(S["model-profiles"].map(m => [m.id, m.id === "demo" ? "Demo model" : m.name + (m.enabled ? "" : " (needs key)"), !m.enabled]), forge.mode)}</select></label>
         <label class="name-field"><span class="sr-only">Name</span><input data-draft="forge-name" value="${esc(forge.name)}" placeholder="Name (optional)" maxlength="100"></label>
         <button class="btn primary" data-act="create" ${canHire() ? "" : "disabled"}>Create agent</button>
       </div>
     </div>`}
     ${canHire() ? "" : `<p class="note">Your role can't create agents. Switch to a manager or builder at the bottom left.</p>`}
-    ${forge.mode === "demo" && !target ? `<p class="note">Demo model runs the real tools on fixed templates, no AI. Add an API key for original writing.</p>` : ""}
+    ${!target ? `<p class="note">The model is set once, here. ${forge.mode === "demo" ? "Demo model runs the real tools on fixed templates, no AI. Add an API key for original writing." : "This agent will always use it."}${!perAction() && !isManager() ? " A manager approves new agents before they can work." : ""}</p>` : ""}
   </div>`;
 }
 
@@ -415,25 +422,26 @@ function chatScreen(id) {
     <header class="chat-top">
       <div class="who">${orb(a.id, { size: 32, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<div><h1>${esc(a.name)}</h1><p>${caps.map(short).map(esc).join(" · ")} · ${esc(modelLabel(a.model_profile_id))}</p></div></div>
       <div class="row">
-        <button class="switch" role="switch" aria-checked="${!alone(a)}" data-act="mode" data-id="${esc(a.id)}" data-level="${alone(a) ? "intern" : "associate"}" ${manages ? "" : "disabled"}><span class="track"><span class="thumb"></span></span><span class="lbl">Ask before acting</span></button>
+        ${perAction() ? `<button class="switch" role="switch" aria-checked="${!alone(a)}" data-act="mode" data-id="${esc(a.id)}" data-level="${alone(a) ? "intern" : "associate"}" ${manages ? "" : "disabled"}><span class="track"><span class="thumb"></span></span><span class="lbl">Ask before acting</span></button>` : ""}
         <details class="menu"><summary aria-label="More options">${icon("more")}</summary><div class="menu-pop">
-          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button><button data-act="archive" data-id="${esc(a.id)}">Archive agent</button>` : ""}
+          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button>` : ""}
           ${manages ? `<button data-act="share-agent" data-id="${esc(a.id)}">Share as template</button>` : ""}
           ${a.status === "active" ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
-          <button data-act="perf" data-id="${esc(a.id)}">About this agent</button></div></details>
+          <button data-act="perf" data-id="${esc(a.id)}">About this agent</button>
+          ${canRemove(a) ? `<button class="danger" data-act="archive" data-id="${esc(a.id)}">Delete agent</button>` : ""}</div></details>
       </div>
     </header>
-    ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming resets review mode and invalidates pending tasks.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
-    ${ui.archive === id ? `<div class="about"><p>Archive ${esc(a.name)}? Unfinished tasks will stop. Its history will be kept.</p><div class="row"><button class="btn small" data-act="archive-confirm" data-id="${esc(id)}">Archive</button><button class="btn small" data-act="dismiss-agent-edit">Cancel</button></div></div>` : ""}
+    ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming stops any unfinished task.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
+    ${ui.archive === id ? `<div class="about danger-zone" role="alertdialog" aria-label="Delete ${esc(a.name)}"><p><b>Delete ${esc(a.name)}?</b> It leaves your workspace and any unfinished task stops. Past work stays in the team's audit history.</p><div class="row"><button class="btn small danger" data-act="archive-confirm" data-id="${esc(id)}">Delete agent</button><button class="btn small" data-act="dismiss-agent-edit">Cancel</button></div></div>` : ""}
     ${m ? `<section class="about"><p>${esc(a.job_description)}</p><dl><dt>Instructions</dt><dd>${esc(a.instructions)}</dd><dt>Tools</dt><dd>${caps.flatMap(c => c.tool_contracts).map(t => `${esc(TOOL_VERB[t.name] || t.name)} <span class="note">(${esc(RISK[t.risk] || t.risk)})</span>`).join("<br>")}</dd><dt>Skills</dt><dd>${caps.filter(c => c.skill).map(c => `<details class="quiet playbook-d"><summary>${esc(c.name)}</summary>${playbook(c.skill)}</details>`).join("") || "--"}</dd><dt>Track record</dt><dd>${m.p.approved_actions} of ${m.p.reviewed_actions} actions approved · ${m.p.successful_tasks} of ${m.p.evaluated_tasks} results marked good · ${m.p.completed_runs} of ${m.p.run_count} tasks finished</dd><dt>Team</dt><dd>${esc(deptName(a.department_id))} · managed by ${esc(userName(a.manager_id))}</dd></dl><button class="link-btn" data-act="close-about" data-id="${esc(id)}">Close</button></section>` : ""}
     ${a.status !== "active" ? `<div class="center-msg small"><p>${esc(a.name)} needs its own connection before the first task. Credentials never travel with a template.</p><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Connect and enable</button></div>` : ""}
-    ${runs.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${alone(a) ? "It works on its own for reads and saves." : "It asks before every action."}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
+    ${runs.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${perAction() ? (alone(a) ? "It works on its own for reads and saves." : "It asks before every action.") : `It can ${esc(abilities(a).join(", "))}, and nothing else.`}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
     <form class="composer" data-form="run" data-id="${esc(id)}">
       ${!runs.length && ex.length ? `<div class="ideas">${ex.slice(0, 3).map(t => `<button type="button" class="idea" data-act="example" data-id="${esc(id)}" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
       <div class="box">
         <label class="sr-only" for="task-${esc(id)}">Message ${esc(a.name)}</label>
         <textarea id="task-${esc(id)}" name="task" rows="1" data-draft="run" data-id="${esc(id)}" required placeholder="${follow ? "Reply…" : `Message ${esc(a.name)}…`}" ${a.status === "active" ? "" : "disabled"}>${esc(ui.drafts[id] ?? "")}</textarea>
-        <div class="box-row"><label class="pill-select quiet"><span class="sr-only">Model for this message</span><select name="mode">${opts(S["model-profiles"].map(p => [p.id, p.id === "demo" ? "Demo model" : p.name + (p.enabled ? "" : " (needs key)"), !p.enabled]), usable)}</select></label>
+        <div class="box-row"><span class="model-chip ${profile(a.model_profile_id)?.enabled ? "" : "off"}" title="Chosen when this agent was created">${esc(modelLabel(a.model_profile_id))}${profile(a.model_profile_id)?.enabled ? "" : " · needs key"}</span>
           <button class="send" aria-label="Send" ${a.status === "active" ? "" : "disabled"}>${icon("send")}</button></div>
       </div>
     </form>
@@ -445,9 +453,10 @@ function inboxScreen() {
   const pending = S.approvals.filter(a => a.status === "pending"), drafts = S.proposals.filter(p => p.status === "draft"), past = S.approvals.filter(a => a.status !== "pending");
   return `<div class="page">
     <h1 class="display">${words("Approvals")}</h1>
-    <p class="lede">Agents that ask before acting wait here. Each answer covers one action.</p>
-    ${pending.length ? `<div class="list">${pending.map(a => askBlock(a, true)).join("")}</div>` : !drafts.length ? `<p class="empty-line">Nothing waiting. You're all caught up.</p>` : ""}
-    ${drafts.length ? `<h2 class="section">Agents waiting to be confirmed</h2><ul class="lines">${drafts.map(p => { const ok = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user); return `<li>${orb(p.id, { size: 26 })}<span><b>${esc(p.spec.name)}</b> <span class="note">${esc(p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(short).join(", "))} · ${esc(userName(p.spec.manager_id))} confirms</span></span><button class="btn small ${ok ? "primary" : ""}" data-act="confirm-draft" data-id="${esc(p.id)}" data-rev="${p.revision}" ${ok ? "" : "disabled"}>Confirm</button></li>`; }).join("")}</ul>` : ""}
+    <p class="lede">${perAction() ? "Agents that ask before acting wait here. Each answer covers one action." : "New agents wait here for a manager. Once approved, an agent works on its own with only the tools it was approved for."}</p>
+    ${drafts.length ? `<h2 class="section">New agents</h2><ul class="lines">${drafts.map(p => { const ok = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user); return `<li>${orb(p.id, { size: 26 })}<span><b>${esc(p.spec.name)}</b> <span class="note">Can ${esc(p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(c => c.name.toLowerCase()).join(", "))} · ${esc(modelLabel(p.spec.model_profile_id))} · asked by ${esc(userName(p.actor_id))} · ${esc(userName(p.spec.manager_id))} approves</span></span><button class="btn small ${ok ? "primary" : ""}" data-act="confirm-draft" data-id="${esc(p.id)}" data-rev="${p.revision}" ${ok ? "" : "disabled"}>Approve agent</button></li>`; }).join("")}</ul>` : ""}
+    ${pending.length ? `${drafts.length ? `<h2 class="section">Actions</h2>` : ""}<div class="list">${pending.map(a => askBlock(a, true)).join("")}</div>` : ""}
+    ${!pending.length && !drafts.length ? `<p class="empty-line">Nothing waiting. You're all caught up.</p>` : ""}
     ${past.length ? `<details class="quiet history"><summary>History (${past.length})</summary><ul class="lines">${past.slice().reverse().slice(0, 25).map(a => `<li><span class="dot ${a.status === "approved" ? "ok" : a.status === "rejected" ? "bad" : "warn"}"></span><span><b>${esc(agentById(a.agent_id)?.name || "Agent")}</b> <span class="note">${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)} · ${esc(a.status.replace(/_/g, " "))}</span></span><time>${clock(a.decided_at || a.updated_at || a.created_at)}</time></li>`).join("")}</ul></details>` : ""}
   </div>`;
 }
@@ -525,7 +534,7 @@ function jobItem(w) {
   return `<section class="job"><div class="job-head"><div><span class="note">${esc(job.name)} · ${w.sample_data ? "fictional input" : "your input"}</span><h2>${esc(w.title)}</h2></div><span class="state ${esc(w.status)}">${esc(state)}</span></div>
     <p class="note">${esc(job.deliverables)}${a ? " · " + esc(a.name) : ""}</p>
     ${w.ticket ? `<p>${esc(w.ticket.body)}</p>` : `<details class="quiet"><summary>Brief and rules</summary><pre>${esc(w.task)}</pre></details>`}
-    ${!w.run_id || ["needs_correction", "failed", "cancelled"].includes(w.status) ? `<form class="row wrap" data-form="assign-ticket" data-id="${id}"><select name="agent_id" required aria-label="Agent">${opts(eligible.map(x => [x.id, x.name]), w.agent_id || "")}</select><select name="mode" aria-label="Model">${opts(S["model-profiles"].filter(m => m.enabled).map(m => [m.id, m.id === "demo" ? "Demo model" : m.name]), S.runs.find(r=>r.id === w.run_id)?.mode || "demo")}</select><button class="btn primary small" ${eligible.length ? "" : "disabled"}>${w.run_id ? "Rerun" : "Assign"}</button>${eligible.length ? "" : `<button type="button" class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}">Build an agent for this</button>`}</form>` : `<a class="link-btn" href="#/agent/${esc(w.agent_id)}">Open the conversation</a>`}
+    ${!w.run_id || ["needs_correction", "failed", "cancelled"].includes(w.status) ? `<form class="row wrap" data-form="assign-ticket" data-id="${id}"><select name="agent_id" required aria-label="Agent">${opts(eligible.map(x => [x.id, x.name]), w.agent_id || "")}</select><button class="btn primary small" ${eligible.length ? "" : "disabled"}>${w.run_id ? "Rerun" : "Assign"}</button>${eligible.length ? "" : `<button type="button" class="btn small" data-act="hire-workflow" data-workflow="${esc(w.workflow)}">Build an agent for this</button>`}</form>` : `<a class="link-btn" href="#/agent/${esc(w.agent_id)}">Open the conversation</a>`}
     ${w.artifacts?.length && w.finished_at ? `<details class="quiet"><summary>Deliverables (${w.artifacts.length})</summary>${w.artifacts.map((x, i) => artifactView(w.run_id + "-" + i, x)).join("")}</details>` : ""}
     ${w.quality ? `<details class="quiet"><summary>Deliverable checks · ${w.quality.passed ? "passed" : "needs repair"}</summary><ul>${w.quality.checks.map(c=>`<li>${c.passed ? "✓" : "×"} ${esc(c.detail)}</li>`).join("")}</ul><p class="note">${esc(w.quality.limits)}</p></details>` : ""}
     ${w.error ? `<p class="err">${esc(w.error)}</p>` : ""}
@@ -540,7 +549,7 @@ async function createAgent() {
   if (target) {
     const a = await api(`agents/${target.id}/capabilities`, "POST", { capability_ids: forge.caps, expected_spec_version: target.spec_version });
     forge = forge0(); location.hash = "#/agent/" + a.id;
-    return `${a.name} is ready. New tools ask before acting.`;
+    return perAction() ? `${a.name} is ready. New tools ask before acting.` : `${a.name} can now use its new tools.`;
   }
   const body = { model_profile_id: forge.mode, department_id: defaultDept(), manager_id: defaultManager() };
   if (forge.caps.length) body.capability_ids = forge.caps;
@@ -576,10 +585,14 @@ document.addEventListener("click", e => {
   if (kind === "mode") { const a = agentById(id); if (a) act(async () => { await api(`agents/${id}/level`, "POST", { level: b.dataset.level, reason: "Switched from the agent page." }); return b.dataset.level === "intern" ? `${a.name} will ask before every action.` : `${a.name} now works on its own for reads and saves.`; }, b); }
   if (kind === "example") { ui.drafts[id] = b.dataset.text; render(); const t = $("[data-draft='run']"); if (t) { grow(t); t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
   if (kind === "new-thread") act(async () => { await api(`agents/${id}/conversations`, "POST", {}); return "Your next message starts a new conversation."; }, b);
-  if (kind === "rename") { ui.rename = id; ui.archive = null; render(); }
-  if (kind === "archive") { ui.archive = id; ui.rename = null; render(); }
+  if (kind === "rename" || kind === "archive") {
+    b.closest("details")?.removeAttribute("open");
+    ui.rename = kind === "rename" ? id : null; ui.archive = kind === "archive" ? id : null;
+    ui.stick = false; render(); ui.stick = true;
+    scrollTo({ top: 0 }); $(kind === "rename" ? `form[data-form="rename"] input` : `[data-act="archive-confirm"]`)?.focus({ preventScroll: true });
+  }
   if (kind === "dismiss-agent-edit") { ui.rename = null; ui.archive = null; render(); }
-  if (kind === "archive-confirm") act(async () => { await api(`agents/${id}`, "DELETE"); ui.archive = null; location.hash = "#/new"; return "Agent archived. History kept."; }, b);
+  if (kind === "archive-confirm") act(async () => { await api(`agents/${id}`, "DELETE"); ui.archive = null; location.hash = "#/new"; return "Agent deleted."; }, b);
   if (kind === "revise") { ui.revise[id] = !ui.revise[id]; ui.stick = false; render(); ui.stick = true; $(`form[data-id="${id}"] input`)?.focus(); }
   if (kind === "slide") { ui.slide[b.dataset.run] = Math.max(0, Number(b.dataset.to)); ui.stick = false; render(); ui.stick = true; }
   if (kind === "ics") { const url = URL.createObjectURL(new Blob([b.dataset.ics], { type: "text/calendar" })), a = document.createElement("a"); a.href = url; a.download = (b.dataset.title || "meeting").replace(/[^\w -]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() + ".ics"; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
@@ -621,10 +634,11 @@ document.addEventListener("submit", e => {
     const a = agentById(f.dataset.id), follow = followTarget(a, S.runs.filter(r => r.agent_id === a.id));
     if (!d.task.trim()) return;
     act(async () => {
-      const body = { task: d.task, mode: d.mode, max_steps: 8 };
+      // The agent's model was fixed when it was created; the server uses it for every task.
+      const body = { task: d.task, max_steps: 8 };
       const conv = activeConversation(a.id);
       if (conv) body.conversation_id = conv.id;
-      if (follow && follow.mode === d.mode) body.follow_up_of = follow.id;
+      if (follow) body.follow_up_of = follow.id;
       await api(`agents/${a.id}/runs`, "POST", body);
       ui.drafts[a.id] = "";
       return null;
@@ -635,7 +649,7 @@ document.addEventListener("submit", e => {
   if (kind === "install") act(async () => { const r = await api(`marketplace/${f.dataset.id}/install`, "POST", { department_id: defaultDept(), manager_id: defaultManager() }); location.hash = "#/agent/" + r.resource.id; return "Installed. Connect it before its first task."; }, sub);
   if (kind === "new-cap") act(async () => { const tools = new FormData(f).getAll("tools"); if (!tools.length) throw Error("Choose at least one action."); await api("capabilities", "POST", { name: d.name, description: d.description, tools }); return "Tool added to the Library."; }, sub);
   if (kind === "create-job") act(async () => { await api("work-queue", "POST", d); return "Job added. Assign an agent to begin."; }, sub);
-  if (kind === "assign-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/assign`, "POST", d); return "Assigned. It will ask before acting."; }, sub);
+  if (kind === "assign-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/assign`, "POST", d); return perAction() ? "Assigned. It will ask before acting." : "Assigned. It's working on it."; }, sub);
   if (kind === "review-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/review`, "POST", { success: d.success === "true", comment: d.comment }); return "Review saved."; }, sub);
 });
 

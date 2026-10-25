@@ -20,6 +20,8 @@ class HardeningTests(unittest.TestCase):
     def call(self, method, path, data=None, user="pavan", key=None):
         if method == "POST" and path.startswith("work-queue"):
             key = key or str(uuid4())
+            if path.endswith("/assign") and data and data.get("mode"):
+                test_workspace.use_model(self.app, data["agent_id"], data["mode"])
         return test_workspace.WorkspaceTests.call(self, method, path, data, user, key)
 
     def analysis_job(self, caps=None):
