@@ -115,6 +115,26 @@ class SkillTests(unittest.TestCase):
         self.assertFalse(meeting["sent"])
         self.assertEqual(meeting["attendees"], ["sam@acme.com"])
 
+    def test_gemini_function_schemas_drop_fields_gemini_rejects(self):
+        from backend.runtime.model import gemini_schema
+        for tool in TOOLS.values():
+            cleaned = gemini_schema(tool["inputSchema"])
+            text = repr(cleaned)
+            for banned in ("additionalProperties", "maxLength", "minLength"):
+                self.assertNotIn(banned, text, tool["name"])
+            self.assertEqual(cleaned["required"], tool["inputSchema"]["required"])
+            self.assertEqual(set(cleaned["properties"]), set(tool["inputSchema"]["properties"]))
+        self.assertIn("additionalProperties", repr(TOOLS["create_slideshow"]["inputSchema"]))
+
+    def test_provider_error_includes_a_short_provider_message(self):
+        import io, json, urllib.error
+        from backend.runtime.model import provider_error
+        body = json.dumps({"error": {"message": "Invalid JSON payload.\n Unknown name \"x\""}}).encode()
+        exc = urllib.error.HTTPError("https://x", 400, "Bad", {}, io.BytesIO(body))
+        err = provider_error("Gemini", exc)
+        self.assertIn("HTTP 400: Invalid JSON payload. Unknown name", str(err))
+        self.assertNotIn("\n", str(err))
+
 
 if __name__ == "__main__":
     unittest.main()
