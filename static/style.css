@@ -479,3 +479,18 @@ body.dragging .halo{animation-duration:1.6s}
 .about.danger-zone{box-shadow:inset 0 0 0 1px rgba(255,140,140,.35)}
 .model-chip{display:inline-flex;align-items:center;height:30px;padding:0 12px;font-size:13px;color:var(--dim);background:rgba(255,255,255,.05);border-radius:999px;cursor:default}
 .model-chip.off{color:#ffc073;background:rgba(255,192,115,.1)}
+
+/* Agent controls stay beside their sidebar conversation. Menus expand within
+   the scroll region so even the last agent's controls remain reachable. */
+.agent-nav-row{display:grid;grid-template-columns:minmax(0,1fr) 32px;align-items:center;border-radius:10px}
+.agent-nav-row>a{min-width:0}
+.agent-nav-row:has(a[aria-current]){background:rgba(255,255,255,.06)}
+.agent-menu{position:static;display:contents}
+.agent-menu>summary{display:grid;place-items:center;width:30px;height:32px;border-radius:8px;color:var(--dim);cursor:pointer}
+.agent-menu>summary:hover,.agent-menu[open]>summary{background:var(--ice-soft);color:var(--ice)}
+.agent-menu>.menu-pop{position:static;grid-column:1/-1;min-width:0;width:auto;margin:4px 6px 10px;padding:6px;box-shadow:none;background:rgba(20,29,47,.95);border:1px solid var(--line-2);border-radius:12px}
+.agent-menu:not([open])>.menu-pop{display:none}
+.agent-menu[open]>.menu-pop{display:flex;flex-direction:column}
+.agent-menu>.menu-pop button{width:100%;text-align:left;white-space:normal}
+
+.agent-owner-group{margin-bottom:10px}.agent-owner-label{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px 6px;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--ice)}.agent-owner-label>span{color:var(--faint);font-size:11px;font-weight:400}.agent-owner-list{margin:0;padding:0;list-style:none}.agent-team-heading{padding:14px 12px 4px;border-top:1px solid var(--line);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
