@@ -226,6 +226,15 @@ function stableSidebar(selector, markup) {
     sidebarMarkup.set(selector, markup);
   }
 }
+function agentMenu(a) {
+  const manages = canManage(a);
+  return `<details class="menu agent-menu"><summary aria-label="Options for ${esc(a.name)}" title="Agent options">${icon("more")}</summary><div class="menu-pop">
+          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button>` : ""}
+          ${manages ? `<button data-act="share-agent" data-id="${esc(a.id)}">Share as template</button>` : ""}
+          ${a.status === "active" ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
+          <button data-act="perf" data-id="${esc(a.id)}">About this agent</button>
+          ${canRemove(a) ? `<button class="danger" data-act="archive" data-id="${esc(a.id)}">Delete agent</button>` : ""}</div></details>`;
+}
 function sidebar() {
   stableSidebar("#identity", opts(S["dev/users"].map(u => [u.id, `${u.name} · ${u.roles.join(", ")}`]), user));
   const pending = S.approvals.filter(a => a.status === "pending").length + S.proposals.filter(p => p.status === "draft").length, jobs = (S["work-queue"] || []).length;
@@ -240,7 +249,25 @@ function sidebar() {
     (lastUsed.get(b.id) || Date.parse(b.created_at) || 0) -
     (lastUsed.get(a.id) || Date.parse(a.created_at) || 0)
   );
-  stableSidebar("#agent-list", recentAgents.length ? recentAgents.map(a => { const st = agentState(a); return `<li><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a></li>`; }).join("") : `<li class="none">No agents yet</li>`);
+  const agentRow = a => { const st = agentState(a); return `<li class="agent-nav-row"><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a>${agentMenu(a)}</li>`; };
+  let agentList;
+  if (S.me.roles.some(r => ["manager", "admin"].includes(r))) {
+    const creators = new Map();
+    for (const agent of recentAgents) {
+      const owner = agent.creator_id || "unknown";
+      if (!creators.has(owner)) creators.set(owner, []);
+      creators.get(owner).push(agent);
+    }
+    const group = (owner, agents, mine = false) => `<li class="agent-owner-group"><h3 class="agent-owner-label">${mine ? "My agents" : esc(owner === "unknown" ? "Unknown creator" : userName(owner))}<span>${agents.length}</span></h3><ul class="agent-owner-list">${agents.map(agentRow).join("") || '<li class="none">No agents created yet</li>'}</ul></li>`;
+    agentList = group(user, creators.get(user) || [], true);
+    creators.delete(user);
+    if (creators.size) agentList += '<li class="agent-team-heading">Team agents · by creator</li>';
+    // Groups follow their most recent agent; agents within each group remain recent-first.
+    agentList += [...creators].map(([owner, agents]) => group(owner, agents)).join("");
+  } else {
+    agentList = recentAgents.map(agentRow).join("") || '<li class="none">No agents yet</li>';
+  }
+  stableSidebar("#agent-list", agentList);
   const managerNav = $("#manager-nav");
   managerNav.hidden = !S.me.roles.some(r => ["manager", "admin"].includes(r));
   stableSidebar("#manager-nav", managerNav.hidden ? "" : `<a class="employees-nav" href="#/employees" data-route="employees">${icon("jobs")}<span><b>Employees</b><small>Team overview & usage</small></span><span aria-hidden="true">↗</span></a>`);
@@ -423,12 +450,7 @@ function chatScreen(id) {
       <div class="who">${orb(a.id, { size: 32, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<div><h1>${esc(a.name)}</h1><p>${caps.map(short).map(esc).join(" · ")} · ${esc(modelLabel(a.model_profile_id))}</p></div></div>
       <div class="row">
         ${perAction() ? `<button class="switch" role="switch" aria-checked="${!alone(a)}" data-act="mode" data-id="${esc(a.id)}" data-level="${alone(a) ? "intern" : "associate"}" ${manages ? "" : "disabled"}><span class="track"><span class="thumb"></span></span><span class="lbl">Ask before acting</span></button>` : ""}
-        <details class="menu"><summary aria-label="More options">${icon("more")}</summary><div class="menu-pop">
-          ${manages ? `<button data-act="teach" data-id="${esc(a.id)}">Add a tool</button><button data-act="rename" data-id="${esc(a.id)}">Rename</button>` : ""}
-          ${manages ? `<button data-act="share-agent" data-id="${esc(a.id)}">Share as template</button>` : ""}
-          ${a.status === "active" ? `<button data-act="new-thread" data-id="${esc(a.id)}">New conversation</button>` : ""}
-          <button data-act="perf" data-id="${esc(a.id)}">About this agent</button>
-          ${canRemove(a) ? `<button class="danger" data-act="archive" data-id="${esc(a.id)}">Delete agent</button>` : ""}</div></details>
+
       </div>
     </header>
     ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming stops any unfinished task.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
@@ -585,6 +607,11 @@ document.addEventListener("click", e => {
   if (kind === "mode") { const a = agentById(id); if (a) act(async () => { await api(`agents/${id}/level`, "POST", { level: b.dataset.level, reason: "Switched from the agent page." }); return b.dataset.level === "intern" ? `${a.name} will ask before every action.` : `${a.name} now works on its own for reads and saves.`; }, b); }
   if (kind === "example") { ui.drafts[id] = b.dataset.text; render(); const t = $("[data-draft='run']"); if (t) { grow(t); t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
   if (kind === "new-thread") act(async () => { await api(`agents/${id}/conversations`, "POST", {}); return "Your next message starts a new conversation."; }, b);
+  if (["rename", "archive", "perf", "new-thread"].includes(kind) && b.closest(".agent-menu")) {
+    b.closest("details")?.removeAttribute("open");
+    location.hash = "#/agent/" + id;
+    document.body.classList.remove("side-open");
+  }
   if (kind === "rename" || kind === "archive") {
     b.closest("details")?.removeAttribute("open");
     ui.rename = kind === "rename" ? id : null; ui.archive = kind === "archive" ? id : null;
