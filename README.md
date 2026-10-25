@@ -15,9 +15,9 @@ python server.py
 
 Open **http://localhost:8000**. Database state persists in `data/workforce.sqlite3`. Start one application process per database. Use the VS Code `Run backend` task or run the command from its terminal.
 
-Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 53 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
+Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 58 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
 
-The server binds to localhost. The identity selector is a **local development impersonation facility**, not production login. Identities and roles are resolved from seeded server records; request bodies cannot declare their own roles. This workbench must not be publicly exposed without real authentication and deployment hardening.
+The server binds to localhost. Set `AUTH_MODE=password` after provisioning an account with `scripts/create_user.py` for real username/password sign-in. Without that setting, the identity selector remains a **local development impersonation facility**. Production mode refuses development authentication. See [backend operations](docs/OPERATIONS.md) for setup, recovery, limits and deployment prerequisites.
 
 ## Live Meta AI
 
@@ -31,6 +31,10 @@ META_MODEL=muse-spark-1.3
 ```
 
 Restart the server. Select **muse-spark-1.3** in the Recruiter or execution mode selector. Set a model ID enabled for your account if it differs. Never paste keys into chat, job descriptions, or Git. `.env` is ignored. `META_API_KEY` is also accepted as an alternative environment variable.
+
+### Team key setup
+
+Share the Meta key through your team’s password manager. Each teammate should copy `.env.example` to `.env` only if they do not already have a `.env`, then set `MODEL_API_KEY` locally. Keep existing local settings when updating the key. Commit only the empty placeholders in `.env.example`; `.env`, other `.env.*` files, and `secrets/` are ignored by Git. The application reads credentials from `.env` or environment variables, so no secrets folder is needed.
 
 To verify your configured Meta key without exposing it:
 

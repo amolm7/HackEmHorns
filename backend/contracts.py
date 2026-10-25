@@ -60,6 +60,9 @@ def department_access(actor, department_id):
 
 
 def visible_agent(actor, agent):
+    require(
+        actor.get("active", True), "This account is disabled.", 403, "account_disabled"
+    )
     in_org(actor, agent)
     if "auditor" not in actor["roles"]:
         department_access(actor, agent["department_id"])

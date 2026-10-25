@@ -2,6 +2,7 @@
 
 import csv
 import html
+import http.client
 from html.parser import HTMLParser
 import io
 import ipaddress
@@ -33,7 +34,10 @@ def parse_outline(text):
         if not line:
             continue
         if line.startswith("#"):
-            current = {"title": line.lstrip("#").strip()[:120] or "Untitled", "bullets": []}
+            current = {
+                "title": line.lstrip("#").strip()[:120] or "Untitled",
+                "bullets": [],
+            }
             slides.append(current)
         else:
             if current is None:
@@ -51,7 +55,10 @@ def number(value):
         parsed = float(cleaned)
     except ValueError:
         return None
-    require(math.isfinite(parsed), "Table numbers must be finite; NaN and infinity are not supported.")
+    require(
+        math.isfinite(parsed),
+        "Table numbers must be finite; NaN and infinity are not supported.",
+    )
     return parsed
 
 
@@ -59,14 +66,27 @@ def analyze_table(text, question=""):
     text = text.strip()
     require(bool(text), "Provide a table with a header row.")
     first = text.splitlines()[0]
-    delimiter = "\t" if "\t" in first and "," not in first else ";" if ";" in first and "," not in first else ","
-    rows = [r for r in csv.reader(io.StringIO(text), delimiter=delimiter) if any(c.strip() for c in r)]
+    delimiter = (
+        "\t"
+        if "\t" in first and "," not in first
+        else ";"
+        if ";" in first and "," not in first
+        else ","
+    )
+    rows = [
+        r
+        for r in csv.reader(io.StringIO(text), delimiter=delimiter)
+        if any(c.strip() for c in r)
+    ]
     require(len(rows) >= 2, "The table needs a header row and at least one data row.")
     require(len(rows[0]) <= 30, "Tables support at most 30 columns.")
     require(len(rows) <= 501, "Tables support at most 500 data rows.")
     header = [h.strip() or f"column {i + 1}" for i, h in enumerate(rows[0])]
     require(len(set(header)) == len(header), "Table column names must be unique.")
-    require(all(len(r) <= len(header) for r in rows[1:]), "A data row has more cells than the header.")
+    require(
+        all(len(r) <= len(header) for r in rows[1:]),
+        "A data row has more cells than the header.",
+    )
     body = [r + [""] * (len(header) - len(r)) for r in rows[1:]]
     columns, numeric, categories = [], {}, {}
     for i, name in enumerate(header):
@@ -74,7 +94,9 @@ def analyze_table(text, question=""):
         nums = [number(v) for v in values]
         if values and all(n is not None for n in nums):
             total = sum(nums)
-            require(math.isfinite(total), "Table totals exceed the supported numeric range.")
+            require(
+                math.isfinite(total), "Table totals exceed the supported numeric range."
+            )
             columns.append({"name": name, "type": "number"})
             numeric[name] = {
                 "count": len(nums),
@@ -100,11 +122,21 @@ def analyze_table(text, question=""):
             value = number(r[vi]) if r[vi].strip() else None
             if value is None:
                 continue
-            label = r[li].strip() if li is not None and r[li].strip() else f"Row {n + 1}"
+            label = (
+                r[li].strip() if li is not None and r[li].strip() else f"Row {n + 1}"
+            )
             totals[label] = round(totals.get(label, 0) + value, 2)
-            require(math.isfinite(totals[label]), "Table group totals exceed the supported numeric range.")
+            require(
+                math.isfinite(totals[label]),
+                "Table group totals exceed the supported numeric range.",
+            )
         points = [{"label": k, "value": v} for k, v in list(totals.items())[:12]]
-        chart = {"type": "bar", "x": label_col or "Row", "y": value_col, "points": points}
+        chart = {
+            "type": "bar",
+            "x": label_col or "Row",
+            "y": value_col,
+            "points": points,
+        }
         if points:
             top = max(totals, key=totals.get)
             low = min(totals, key=totals.get)
@@ -112,8 +144,12 @@ def analyze_table(text, question=""):
             if low != top:
                 highlights.append(f"Lowest {value_col}: {low} ({totals[low]:g})")
             if len(totals) > len(points):
-                highlights.append(f"Chart shows the first {len(points)} of {len(totals)} groups; statistics include all rows.")
-        highlights.append(f"Total {value_col}: {numeric[value_col]['sum']:g} across {numeric[value_col]['count']} rows")
+                highlights.append(
+                    f"Chart shows the first {len(points)} of {len(totals)} groups; statistics include all rows."
+                )
+        highlights.append(
+            f"Total {value_col}: {numeric[value_col]['sum']:g} across {numeric[value_col]['count']} rows"
+        )
     return {
         "kind": "analysis",
         "rows": len(body),
@@ -129,6 +165,7 @@ def analyze_table(text, question=""):
 
 class _PageText(HTMLParser):
     """Prefer article content and omit navigation, scripts and other page chrome."""
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.stack = []
@@ -136,11 +173,42 @@ class _PageText(HTMLParser):
         self.article = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+        if tag in {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }:
             return
         attrs = dict(attrs)
         classes = set(attrs.get("class", "").split())
-        skip = tag in {"script", "style", "noscript", "svg", "head", "nav", "footer", "aside"} or attrs.get("role") == "navigation" or bool(classes & {"mw-editsection", "vector-header", "vector-page-toolbar", "mw-jump-link", "toc", "reflist", "navbox"})
+        skip = (
+            tag
+            in {"script", "style", "noscript", "svg", "head", "nav", "footer", "aside"}
+            or attrs.get("role") == "navigation"
+            or bool(
+                classes
+                & {
+                    "mw-editsection",
+                    "vector-header",
+                    "vector-page-toolbar",
+                    "mw-jump-link",
+                    "toc",
+                    "reflist",
+                    "navbox",
+                }
+            )
+        )
         article = tag in {"main", "article"} or "mw-parser-output" in classes
         self.stack.append((tag, skip, article))
 
@@ -169,10 +237,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 def public_address(url):
     parts = urlsplit(url)
     require(parts.scheme in {"http", "https"}, "Only http and https links can be read.")
-    require(bool(parts.hostname) and not parts.username and not parts.password, "Invalid link.")
+    require(
+        bool(parts.hostname) and not parts.username and not parts.password,
+        "Invalid link.",
+    )
     require(parts.port in {None, 80, 443}, "Only standard web ports can be read.")
     try:
-        addresses = {info[4][0] for info in socket.getaddrinfo(parts.hostname, parts.port or 443)}
+        addresses = {
+            info[4][0]
+            for info in socket.getaddrinfo(
+                parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
+            )
+        }
     except OSError:
         raise Error("That address could not be found.", 502, "tool_error")
     require(
@@ -181,33 +257,99 @@ def public_address(url):
         403,
         "tool_denied",
     )
+    return sorted(addresses, key=lambda address: ipaddress.ip_address(address).version)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, address):
+        super().__init__()
+        self.address = address
+
+    def http_open(self, request):
+        def connect(host, **kwargs):
+            connection = http.client.HTTPConnection(host, **kwargs)
+            connection._create_connection = (
+                lambda target, timeout, source_address=None: socket.create_connection(
+                    (self.address, target[1]), timeout, source_address
+                )
+            )
+            return connection
+
+        return self.do_open(connect, request)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, address, context):
+        super().__init__(context=context)
+        self.address = address
+
+    def https_open(self, request):
+        def connect(host, **kwargs):
+            connection = http.client.HTTPSConnection(host, **kwargs)
+            # Keep original host for SNI and certificate checks; only the socket address is pinned.
+            connection._create_connection = (
+                lambda target, timeout, source_address=None: socket.create_connection(
+                    (self.address, target[1]), timeout, source_address
+                )
+            )
+            return connection
+
+        return self.do_open(connect, request, context=self._context)
 
 
 def read_page(url):
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=certifi.where())),
-        _NoRedirect,
-    )
     for _ in range(4):
-        public_address(url)
+        addresses = public_address(url)
+        address = addresses[0]
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(address),
+            _PinnedHTTPSHandler(
+                address, ssl.create_default_context(cafile=certifi.where())
+            ),
+            _NoRedirect,
+        )
         request = urllib.request.Request(
-            url, headers={"User-Agent": "HireAnAgent/1.0 (+local)", "Accept": "text/html,text/plain"}
+            url,
+            headers={
+                "User-Agent": "HireAnAgent/1.0 (+local)",
+                "Accept": "text/html,text/plain",
+            },
         )
         try:
             response = opener.open(request, timeout=8)
         except urllib.error.HTTPError as e:
             if e.code in {301, 302, 303, 307, 308} and e.headers.get("Location"):
                 url = urljoin(url, e.headers["Location"])
+                e.close()
                 continue
-            return {"kind": "page_error", "url": url, "error": f"The page returned HTTP {e.code}.", "http_status": e.code}
+            e.close()
+            return {
+                "kind": "page_error",
+                "url": url,
+                "error": f"The page returned HTTP {e.code}.",
+                "http_status": e.code,
+            }
         except (urllib.error.URLError, TimeoutError, OSError):
-            return {"kind": "page_error", "url": url, "error": "The page could not be reached."}
+            return {
+                "kind": "page_error",
+                "url": url,
+                "error": "The page could not be reached.",
+            }
         with response:
             kind = response.headers.get_content_type()
-            require(kind in {"text/html", "text/plain", "application/xhtml+xml"}, "Only text pages can be read.", 502, "tool_error")
+            require(
+                kind in {"text/html", "text/plain", "application/xhtml+xml"},
+                "Only text pages can be read.",
+                502,
+                "tool_error",
+            )
             raw = response.read(MAX_PAGE_BYTES)
             charset = response.headers.get_content_charset() or "utf-8"
-        text = raw.decode(charset, "replace")
+        try:
+            text = raw.decode(charset, "replace")
+        except LookupError:
+            text = raw.decode("utf-8", "replace")
         title = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
         if kind != "text/plain":
             parser = _PageText()
@@ -218,9 +360,11 @@ def read_page(url):
         return {
             "kind": "page",
             "url": url,
-            "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip()[:200] if title else url,
+            "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip()[:200]
+            if title
+            else url,
             "text": text[:6000],
-            "truncated": len(text) > 6000,
+            "truncated": len(text) > 6000 or len(raw) == MAX_PAGE_BYTES,
         }
     raise Error("Too many redirects.", 502, "tool_error")
 
@@ -228,8 +372,16 @@ def read_page(url):
 def perform(db, name, args, execution_id):
     require(name in TOOLS, "Unknown sandbox tool.", 403)
     require(isinstance(args, dict), "Tool arguments must be an object.")
+    schema = TOOLS[name]["inputSchema"]
+    require(all(field in args for field in schema["required"]), "Missing required tool arguments.")
+    for field, value in args.items():
+        require(field in schema["properties"], "Unknown tool argument.")
+        spec = schema["properties"][field]
+        require(isinstance(value, str) and spec.get("minLength", 0) <= len(value) <= spec["maxLength"], f"Invalid {field}: expected text up to {spec['maxLength']} characters.")
     if name == "analyze_data":
-        return analyze_table(string(args.get("table"), "table", 4000), str(args.get("question") or ""))
+        return analyze_table(
+            string(args.get("table"), "table", 4000), str(args.get("question") or "")
+        )
     if name == "read_url":
         # Network access happens outside any database transaction.
         return {**read_page(string(args.get("url"), "url", 2000)), "fetched_at": now()}
@@ -269,7 +421,7 @@ def perform(db, name, args, execution_id):
                 }
             else:
                 title = string(args.get("title"), "title", 200)
-                body = string(args.get("body"), "body", 4000)
+                body = string(args.get("body"), "body", 40000)
                 result = {
                     "kind": "document",
                     "artifact_id": uid(),
@@ -313,7 +465,10 @@ def perform(db, name, args, execution_id):
         }
         source = TICKETS if name == "search_tickets" else DOCS
         if name == "search_tickets" and any(t["id"].lower() == query for t in TICKETS):
-            return {"tickets": [t for t in TICKETS if t["id"].lower() == query], "sample_data": True}
+            return {
+                "tickets": [t for t in TICKETS if t["id"].lower() == query],
+                "sample_data": True,
+            }
         ranked = sorted(
             [
                 (len(terms & set(re.findall(r"[a-z0-9]+", json.dumps(x).lower()))), x)

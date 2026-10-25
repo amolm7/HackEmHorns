@@ -69,7 +69,7 @@ def agent_activity(agent_id: UUID, ctx: Context) -> dict:
     return ctx.dispatch()
 
 
-async def activity_events(service, actor_id, agent_id, request):
+async def activity_events(service, actor_id, agent_id, request, auth=None):
     """Bounded, reconnectable state stream. Recheck identity and access on every tick.
 
     No database transaction is held while waiting or while sending to the client.
@@ -80,6 +80,8 @@ async def activity_events(service, actor_id, agent_id, request):
         if await request.is_disconnected():
             return
         try:
+            if auth is not None:
+                await run_in_threadpool(auth.actor, request, actor_id)
             snapshot = await run_in_threadpool(service.handle, "GET", f"/api/agents/{agent_id}/activity", None, actor_id)
         except Error:
             yield 'event: access-lost\ndata: {}\n\n'
@@ -98,7 +100,7 @@ async def agent_events(agent_id: UUID, ctx: Context):
     # Reject forbidden/missing agents before sending the streaming response headers.
     await run_in_threadpool(ctx.service.handle, "GET", f"/api/agents/{agent_id}/activity", None, ctx.actor_id)
     return StreamingResponse(
-        activity_events(ctx.service, ctx.actor_id, str(agent_id), ctx.request),
+        activity_events(ctx.service, ctx.actor_id, str(agent_id), ctx.request, ctx.request.app.state.auth),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )

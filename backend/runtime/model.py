@@ -7,6 +7,29 @@ import urllib.request
 from ..contracts import Error, require
 
 
+def provider_error(provider, exc):
+    status = getattr(exc, "code", None)
+    retryable = status in {408, 429, 500, 502, 503, 504} if status else True
+    retry_after = 0
+    try:
+        retry_after = min(60, max(0, int(exc.headers.get("Retry-After", "0"))))
+    except (AttributeError, TypeError, ValueError):
+        pass
+    if isinstance(exc, urllib.error.HTTPError):
+        exc.close()
+    message = (
+        f"{provider} returned HTTP {status}."
+        if status
+        else f"{provider} could not be reached."
+    )
+    return Error(
+        message,
+        502,
+        "provider_error",
+        {"retryable": retryable, "retry_after": retry_after},
+    )
+
+
 def gemini_generate(config, contents, instruction, tools=None, structured=False):
     key = config.get("GEMINI_API_KEY", "")
     model = config.get("GEMINI_MODEL", "gemini-2.5-flash")
@@ -44,14 +67,8 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
             req, timeout=40, context=ssl.create_default_context(cafile=certifi.where())
         ) as r:
             out = json.load(r)
-    except urllib.error.HTTPError as e:
-        raise Error(
-            f"Gemini returned HTTP {e.code}. Check key, model access, and quota.",
-            502,
-            "provider_error",
-        )
-    except (urllib.error.URLError, TimeoutError):
-        raise Error("Gemini could not be reached.", 502, "provider_error")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        raise provider_error("Gemini", exc)
     candidates = out.get("candidates", [])
     require(
         bool(candidates and candidates[0].get("content", {}).get("parts")),
@@ -148,14 +165,8 @@ def meta_generate(config, contents, instruction, tools=None, structured=False):
             req, timeout=45, context=ssl.create_default_context(cafile=certifi.where())
         ) as response:
             data = json.load(response)
-    except urllib.error.HTTPError as e:
-        raise Error(
-            f"Meta Model API returned HTTP {e.code}. Check the key, model access, and quota.",
-            502,
-            "provider_error",
-        )
-    except (urllib.error.URLError, TimeoutError):
-        raise Error("Meta Model API could not be reached.", 502, "provider_error")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        raise provider_error("Meta Model API", exc)
     choices = data.get("choices", [])
     require(bool(choices), "Meta returned no usable response.", 502, "provider_error")
     native = choices[0].get("message", {})

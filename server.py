@@ -29,5 +29,10 @@ if __name__ == "__main__":
         f"Hire an Agent: http://localhost:{port} · Swagger: http://localhost:{port}/docs",
         flush=True,
     )
-    print("Local development identities only; fictional support sandbox.", flush=True)
+    print(
+        "Authentication: "
+        + settings.get("AUTH_MODE", "development")
+        + " · Local workspace",
+        flush=True,
+    )
     uvicorn.run(app, host="127.0.0.1", port=port, workers=1)

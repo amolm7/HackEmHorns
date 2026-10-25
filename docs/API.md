@@ -4,7 +4,7 @@ Base URL: `http://localhost:8000/api`. Swagger UI: `/docs`. Machine-readable Ope
 
 ## Identity, errors and replay protection
 
-`X-Dev-User: pavan` selects a server-defined local test identity. Default: `pavan`. This is intentionally not production authentication; only localhost is supported. A `roles` or `level` field in a request cannot grant authority.
+`AUTH_MODE=password` uses a server-side session cookie. POST `/auth/login` with username/password, GET `/auth/session` for a CSRF token, and include `X-CSRF-Token` on authenticated mutations. POST `/auth/logout` revokes the session. `X-Dev-User` is ignored in this mode. In development mode only, `X-Dev-User: pavan` selects a local test identity (default `pavan`). Production requires password mode and a configured HTTPS origin. See [operations](OPERATIONS.md). A `roles` or `level` field in a request cannot grant authority.
 
 Seed users: `amol` (admin/manager), `tarun` (manager), `shaun` (builder), `pavan` (manager/builder), `member`, `auditor`. The test-only other organization identity is disabled in the running app.
 
@@ -14,9 +14,9 @@ Error envelope:
 {"error":{"code":"permission_denied","message":"Only the assigned manager or an organization admin may do this.","details":{}}}
 ```
 
-400 = invalid domain input, 403 = permission/access denied, 404 = absent/inaccessible resource, 409 = state/version/idempotency conflict, 413 = oversized body, 415 = content type, 422 = Pydantic validation failure or unsupported sandbox request, 502 = model/tool transport failure. Malformed JSON, invalid UUIDs/enums, extra fields, type coercion attempts, and missing required idempotency headers now return 422. Validation errors keep the error envelope and include field locations/messages without echoing input values. HTTP mutations return 200 with the resource; run execution continues asynchronously.
+401 = sign-in required/expired, 429 = rate limited, 503 = not ready, 400 = invalid domain input, 403 = permission/access denied, 404 = absent/inaccessible resource, 409 = state/version/idempotency conflict, 413 = oversized body, 415 = content type, 422 = Pydantic validation failure or unsupported sandbox request, 502 = model/tool transport failure. Malformed JSON, invalid UUIDs/enums, extra fields, type coercion attempts, and missing required idempotency headers now return 422. Validation errors keep the error envelope and include field locations/messages without echoing input values. HTTP mutations return 200 with the resource; run execution continues asynchronously.
 
-Required `Idempotency-Key` header on proposal confirmation, marketplace install, run submission, approval decisions, and task outcome recording. The key is scoped to actor, org, operation and path. Same key/body returns the original result; same key/different body returns 409. Use a new UUID for a new operation, retain it for retries. Stored replay results are snapshots, so GET the resource for its current state.
+Required `Idempotency-Key` header on proposal confirmation, marketplace install, run submission, approval decisions, task outcome recording, and all work-queue POST operations. The key is scoped to actor, org, operation and path. Same key/body returns the original result; same key/different body returns 409. Use a new UUID for a new operation, retain it for retries. Stored replay results are snapshots, so GET the resource for its current state.
 
 ## Identity and configuration
 
@@ -181,7 +181,7 @@ Nutrition labels show actual validation counts and scope. Each listing retains i
 
 ## UI backend improvements
 
-All new mutation requests below use the existing `X-Dev-User` identity. Quick creation, capability additions, conversation creation, and runs require `Idempotency-Key`. Reuse a key only to retry the same payload.
+All new mutation requests below use the configured session authentication (or `X-Dev-User` in development mode). Quick creation, capability additions, conversation creation, and runs require `Idempotency-Key`. Reuse a key only to retry the same payload.
 
 | Method | Endpoint | Behavior |
 | --- | --- | --- |
@@ -198,3 +198,17 @@ All new mutation requests below use the existing `X-Dev-User` identity. Quick cr
 `POST /agents/{id}/runs` additionally accepts `conversation_id`. It continues the latest completed turn in a live conversation, rejects parallel/stale/cross-user or cross-agent continuation, and requires the same model. A new conversation is needed after an unfinished task or to switch models. Legacy `follow_up_of` remains supported. Public runs include `conversation_id` and compatible `thread_id`.
 
 Completed demo runs now include a persisted `result.answer`. New approval actions include `summary` in their immutable hash; old action records retain their existing hash format. Rename remains the existing versioned `PATCH /agents/{id}` operation, including its asks-first reset and pending-run invalidation behavior.
+
+## Work queue and quality
+
+`GET /work-queue` lists actor-visible jobs. `POST /work-queue` accepts `workflow` (`launch`, `analysis`, `brief`), `title`, `task`, optional `department_id`, and optional `acceptance`:
+
+```json
+{"workflow":"launch","title":"Campus launch","task":"Prepare the package.\nchannel,signups\nAmbassadors,180\nSocial,240","acceptance":{"slide_count":5,"required_sections":["Recommendation","Risks","Next steps"],"min_document_words":40}}
+```
+
+Analysis workflows require a CSV source in the brief. `POST /work-queue/sample-batch` loads labeled fictional input for a workflow. `POST /work-queue/{id}/assign` accepts `agent_id` and `mode`. `POST /work-queue/{id}/review` accepts `success` and `comment`; passing automated checks is necessary but not sufficient for manager acceptance. IDs here can also be stable seeded IDs, not just UUIDs.
+
+Job results include `quality` (`passed`, individual checks, limits), artifacts, ownership, outcome and timestamps. A final run with missing/invalid deliverables gets `error_code=deliverable_validation` after at most one live repair attempt. Retryable provider errors preserve `retry_count` and `next_attempt_at`; exhaustion produces `error_code=retry_exhausted`. Rerun corrected/failed jobs through assignment; prior attempt IDs and deliverables remain available.
+
+`GET /auth/config` is public and exposes only the authentication mode. `/health` and `/ready` are public liveness/readiness probes. Readiness is not an assertion of deployment security.

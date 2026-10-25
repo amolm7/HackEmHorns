@@ -30,6 +30,12 @@ class Application:
             401,
             "unauthorized",
         )
+        require(
+            actor.get("active", True),
+            "This account is disabled.",
+            403,
+            "account_disabled",
+        )
         return actor
 
     def handle(self, method, url, data=None, user_id="pavan", key=None):
@@ -41,11 +47,18 @@ class Application:
             actor = self.actor(c, user_id)
             require(isinstance(data, dict), "JSON body must be an object.")
             idem = method == "POST" and (
-                (
+                parts[1:2] == ["work-queue"]
+                or (
                     len(parts) >= 2
                     and parts[-1] in ["confirm", "install", "runs", "decision", "quick-create"]
                 )
                 or (len(parts) == 4 and parts[-1] in ["outcome", "capabilities", "conversations"])
+            )
+            permission_hash = digest(
+                {
+                    k: actor.get(k)
+                    for k in ["org_id", "roles", "department_ids", "active"]
+                }
             )
             idem_id = None
             if idem:
@@ -69,6 +82,12 @@ class Application:
                         409,
                         "idempotency_conflict",
                     )
+                    require(
+                        old.get("permission_hash") == permission_hash,
+                        "Permissions changed since this request. Refresh before continuing.",
+                        409,
+                        "replay_access_changed",
+                    )
                     return old["result"]
             result = self.route(c, actor, method, parts, query, data)
             if idem_id:
@@ -79,6 +98,7 @@ class Application:
                         "id": idem_id,
                         "org_id": actor["org_id"],
                         "payload_hash": payload_hash,
+                        "permission_hash": permission_hash,
                         "result": result,
                         "created_at": now(),
                     },
@@ -91,7 +111,12 @@ class Application:
         if p[1:2] == ["work-queue"]:
             return workqueue.route(c, self, actor, method, p, d)
         if method == "GET" and path == "me":
-            return {**actor, "identity_mode": "local_development_only"}
+            return {
+                **actor,
+                "identity_mode": "password"
+                if self.config.get("AUTH_MODE") == "password"
+                else "local_development_only",
+            }
         if method == "GET" and path == "dev/users":
             return [u for u in all_rows(c, "users") if u["org_id"] == actor["org_id"]]
         if method == "GET" and path == "model-profiles":
@@ -313,7 +338,9 @@ class Application:
                 if (not q.get("agent_id") or run["agent_id"] == q["agent_id"]) and (
                     not q.get("status") or run["status"] == q["status"]
                 ):
-                    result.append({**public_run(run), "outcome": outcomes.get(run["id"])})
+                    result.append(
+                        {**public_run(run), "outcome": outcomes.get(run["id"])}
+                    )
             return result
         if len(p) >= 3 and p[1] == "runs":
             run = get(c, "runs", p[2])
@@ -321,7 +348,8 @@ class Application:
             visible_agent(actor, get(c, "agents", run["agent_id"]))
             if len(p) == 3 and method == "GET":
                 outcome = next(
-                    (o for o in all_rows(c, "outcomes") if o["run_id"] == run["id"]), None
+                    (o for o in all_rows(c, "outcomes") if o["run_id"] == run["id"]),
+                    None,
                 )
                 return {**public_run(run), "outcome": outcome}
             if len(p) == 4:

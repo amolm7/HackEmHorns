@@ -5,8 +5,9 @@ const assert = require("node:assert/strict");
 const element = { addEventListener() {}, setAttribute() {}, removeAttribute() {}, classList: { add() {}, remove() {}, toggle() {} } };
 const context = {
   console, assert, setTimeout, clearTimeout,
+  localStorage: { getItem() { return null; }, setItem() {} },
   sessionStorage: { getItem() { return null; }, setItem() {} },
-  document: { addEventListener() {}, querySelector() { return element; }, querySelectorAll() { return []; }, body: { classList: element.classList } },
+  document: { addEventListener() {}, querySelector() { return element; }, querySelectorAll() { return []; }, documentElement: { style: { setProperty() {} } }, body: { classList: element.classList } },
   location: { hash: "#/new" }, addEventListener() {},
 };
 vm.createContext(context);
