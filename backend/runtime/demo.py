@@ -177,8 +177,11 @@ def email_args(task):
 
 
 def task_args(task):
-    bits = fragments(task) or ["Review this request"]
-    return {"title": topic(task), "tasks": "\n".join(f"- {b[:160]}" for b in bits[:8])}
+    head, colon, body = task.partition(":")
+    source = body if colon and body.strip() else task
+    bits = fragments(source) or ["Review this request"]
+    title = "Task list" if colon else topic(task)
+    return {"title": title, "tasks": "\n".join(f"- {b[:1].upper() + b[1:160]}" for b in bits[:8])}
 
 
 def workspace_plan(task, names, strict=False, acceptance=None):

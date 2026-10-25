@@ -13,13 +13,14 @@ from backend.db import get, put, all_rows
 from backend.runtime import model
 from backend.api.application import create_app
 from fastapi.testclient import TestClient
+from tests.test_workspace import use_model
 
 
 class BackendTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "test.db"
-        self.app = Application(self.path, {"ALLOW_TEST_ORG": True})
+        self.app = Application(self.path, {"ALLOW_TEST_ORG": True, "APPROVAL_SCOPE": "action"})
 
     def tearDown(self):
         self.app.close()
@@ -55,6 +56,8 @@ class BackendTests(unittest.TestCase):
     def start_run(
         self, agent, task="Triage the urgent login outage and draft a reply", **extra
     ):
+        if extra.get("mode"):
+            use_model(self.app, agent["id"], extra["mode"])
         return self.call(
             "POST",
             f'agents/{agent["id"]}/runs',
@@ -325,7 +328,7 @@ class BackendTests(unittest.TestCase):
         self.app.runtime.tick()
         review = self.pending()[0]
         self.app.close()
-        self.app = Application(self.path, {"ALLOW_TEST_ORG": True})
+        self.app = Application(self.path, {"ALLOW_TEST_ORG": True, "APPROVAL_SCOPE": "action"})
         self.app.runtime.recover()
         self.assertEqual(
             self.call("GET", f'runs/{r["id"]}')["status"], "awaiting_approval"
@@ -351,7 +354,7 @@ class BackendTests(unittest.TestCase):
             put(c, "actions", action)
         first = self.app.mcp.call("create_draft", action["arguments"], action["id"])
         self.app.close()
-        self.app = Application(self.path, {"ALLOW_TEST_ORG": True})
+        self.app = Application(self.path, {"ALLOW_TEST_ORG": True, "APPROVAL_SCOPE": "action"})
         self.app.runtime.recover()
         self.drain(False, 3)
         draft = [s for s in self.steps(r) if s["label"] == "create_draft"][0]["data"][

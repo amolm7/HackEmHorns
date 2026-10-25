@@ -24,7 +24,7 @@ TOOLS = {
     },
     "create_draft": {
         "name": "create_draft",
-        "description": "Save a local reply draft for a support ticket. Does not send a message. Requires human approval at every level.",
+        "description": "Save a local reply draft for a support ticket. Does not send a message.",
         "risk": "always_approve",
         "inputSchema": {
             "type": "object",
@@ -71,7 +71,7 @@ TOOLS = {
     },
     "draft_email": {
         "name": "draft_email",
-        "description": "Save an email draft in the workspace. Does not send anything. Requires human approval at every level.",
+        "description": "Save an email draft in the workspace. Does not send anything.",
         "risk": "always_approve",
         "inputSchema": {
             "type": "object",
@@ -195,6 +195,10 @@ SKILLS = {
         "Stay under 120 words. Never promise a resolution time or ask for a password. A person reviews and sends it."
     ),
 }
+
+# "agent": a manager approves each agent and its exact tools once, when it is hired; its tasks then run
+# without per-action review. "action": every Intern action, and every action with outside effects, waits.
+APPROVAL_SCOPES = ("agent", "action")
 
 SUPPORT_TOOLS = {"search_tickets", "search_docs", "create_draft"}
 SELFTEST_CSV = "item,amount\na,1\nb,2\nc,3"
@@ -411,8 +415,13 @@ def capability_record(cap):
     }
 
 
-def upgrade(c):
+def upgrade(c, approval_scope="agent"):
     """Idempotently add catalog entries introduced after the first seed, so existing databases gain them."""
+    require(approval_scope in APPROVAL_SCOPES, "APPROVAL_SCOPE must be agent or action.")
+    for row in all_rows(c, "settings"):
+        # Policies created before approval scopes existed adopt the configured default once.
+        if row["id"].startswith("policy:") and "approval_scope" not in row:
+            put(c, "settings", {**row, "approval_scope": approval_scope})
     existing = {x["id"]: x for x in all_rows(c, "capabilities")}
     for cap in CAPS:
         if cap["id"] not in existing:
@@ -442,10 +451,10 @@ def upgrade(c):
         )
 
 
-def seed(db):
+def seed(db, approval_scope="agent"):
     with db.transaction(True) as c:
         if any(x["id"] == "seed-v1" for x in all_rows(c, "settings")):
-            return upgrade(c)
+            return upgrade(c, approval_scope)
         for id, name in [("support", "Support"), ("engineering", "Engineering")]:
             put(c, "departments", {"id": id, "org_id": "hacktx", "name": name})
         people = [
@@ -512,7 +521,7 @@ def seed(db):
                 "secret_ref": "process:local-mcp",
             },
         )
-        upgrade(c)
+        upgrade(c, approval_scope)
         put(c, "settings", {"id": "seed-v1", "created_at": now()})
 
 

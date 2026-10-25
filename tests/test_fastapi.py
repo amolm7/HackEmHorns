@@ -11,7 +11,7 @@ from backend.app import Application
 class FastAPITransportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.service = Application(Path(self.tmp.name) / "api.db")
+        self.service = Application(Path(self.tmp.name) / "api.db", {"APPROVAL_SCOPE": "action"})
         self.api = create_app(self.service, start_worker=False)
         self.client = TestClient(self.api, base_url="http://localhost")
         self.client.__enter__()

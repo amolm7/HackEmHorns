@@ -10,11 +10,20 @@ from backend.registry import seed
 from backend.runtime import mcp as mcp_module
 
 
+def use_model(app, agent_id, mode):
+    """Test setup: the agent was created with this model (models are fixed per agent)."""
+    with app.db.transaction(True) as c:
+        row = get(c, "agents", agent_id)
+        row["model_profile_id"] = mode
+        put(c, "agents", row)
+
+
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "test.db"
-        self.app = Application(self.path, {"ALLOW_TEST_ORG": True})
+        # These suites exercise per-action review, which remains available as an organization policy.
+        self.app = Application(self.path, {"ALLOW_TEST_ORG": True, "APPROVAL_SCOPE": "action"})
 
     def tearDown(self):
         self.app.close()
@@ -45,6 +54,8 @@ class WorkspaceTests(unittest.TestCase):
         return p, agent
 
     def start(self, agent, task, **extra):
+        if extra.get("mode"):
+            use_model(self.app, agent["id"], extra["mode"])
         return self.call(
             "POST",
             f"agents/{agent['id']}/runs",
@@ -329,6 +340,7 @@ class WorkspaceTests(unittest.TestCase):
             )
             put(c, "runs", row)
         self.app.config["MODEL_API_KEY"] = "test-key"
+        use_model(self.app, agent["id"], "meta")
         follow = self.call(
             "POST",
             f"agents/{agent['id']}/runs",

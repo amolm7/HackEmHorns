@@ -129,3 +129,10 @@ Every capability carries a short **skill**: a playbook for doing that kind of wo
 - Slides accept `> ` lead statements, `stat: 38% | label` headline numbers, `notes: ` speaker notes, and a `theme` (aurora, paper, sunrise, mono). The viewer picks a layout (cover, statement, stats, list) per slide.
 - `schedule_meeting` saves an invite with attendees, time, agenda and a downloadable `.ics` file. It cannot see calendars and sends nothing. `draft_email` saves an unsent draft and always asks for approval. `create_task_list` saves tasks with optional owner and due date.
 - Demo mode reads obvious details from the request (emails, weekday or date, time, duration) and labels everything as a template.
+
+### Approvals, scope and models
+
+- **Agent-level approval (default).** A manager approves each agent, with its exact tools and model, once, when it is created. Managers and admins approve their own; a builder's request waits in **Approvals** for the assigned manager. After that the agent's tasks run without per-action review. Tools still only save inside the workspace; nothing is sent, booked or published. An admin can switch back to per-action review with `PATCH /api/policy {"approval_scope": "action"}`.
+- **Scope.** An agent can only call the tools it was approved for (enforced on the server), and live models are told to decline work outside those skills instead of answering in plain text.
+- **Model fixed at creation.** Runs always use the agent's model; requesting a different one returns 409 `model_fixed`. The chat shows the model but has no picker.
+- **Deleting agents.** The creator, the assigned manager or an admin can delete an agent from its `…` menu. Unfinished tasks stop; history stays in the audit trail (`DELETE /api/agents/{id}`, a soft archive).

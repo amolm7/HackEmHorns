@@ -12,7 +12,7 @@ class Application:
     def __init__(self, path, config=None, worker=False):
         self.config = config or {}
         self.db = Database(path)
-        registry.seed(self.db)
+        registry.seed(self.db, self.config.get("APPROVAL_SCOPE", "agent"))
         self.mcp = MCP(self.db)
         self.runtime = Runtime(self)
         if worker:
@@ -138,7 +138,7 @@ class Application:
                 },
                 {
                     "id": "gemini",
-                    "name": self.config.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                    "name": self.config.get("GEMINI_MODEL", "gemini-3.8-flash"),
                     "enabled": bool(self.config.get("GEMINI_API_KEY")),
                     "is_ai": True,
                 },
@@ -207,9 +207,11 @@ class Application:
             if method == "PATCH":
                 roles(actor, "admin")
                 require(
-                    set(d) == {"require_all_approvals"}
-                    and type(d["require_all_approvals"]) is bool,
-                    "Provide require_all_approvals:boolean.",
+                    bool(d)
+                    and set(d) <= {"require_all_approvals", "approval_scope"}
+                    and type(d.get("require_all_approvals", False)) is bool
+                    and d.get("approval_scope", "agent") in registry.APPROVAL_SCOPES,
+                    "Provide require_all_approvals:boolean and/or approval_scope: agent or action.",
                 )
                 policy.update(**d, revision=policy["revision"] + 1)
                 put(c, "settings", policy)

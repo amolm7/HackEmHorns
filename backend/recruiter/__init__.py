@@ -18,12 +18,14 @@ def check_manager(c, actor, department_id, manager_id):
     department_access(manager, department_id)
 
 
-def new_agent(c, actor, spec, status="active"):
+def new_agent(c, actor, spec, status="active", creator_id=None):
     check_manager(c, actor, spec.get("department_id"), spec.get("manager_id"))
     agent = {
         "id": uid(),
         "org_id": actor["org_id"],
-        "creator_id": actor["id"],
+        # The person who asked for the agent, even when a manager approved it.
+        "creator_id": creator_id or actor["id"],
+        "approved_by": actor["id"],
         "department_id": spec["department_id"],
         "manager_id": spec["manager_id"],
         "name": string(spec.get("name"), "name", 100),
@@ -63,6 +65,9 @@ INTENTS = {
     "write-document": ["document", "memo", "report", "brief", "proposal", "essay", "write up", "one-pager", "plan for"],
     "analyze-data": ["data", "csv", "spreadsheet", "analy", "chart", "metrics", "numbers"],
     "research-web": ["research", "summar", "article", "web page", "website", "url", "http", "look up"],
+    "schedule-meetings": ["meeting", "schedule", "calendar", "invite", "kickoff", "1:1", "standup"],
+    "draft-email": ["email", "e-mail", "outreach", "follow-up note", "follow up note"],
+    "plan-tasks": ["task list", "to-do", "todo", "action item", "checklist"],
 }
 SUPPORT_WORDS = ["ticket", "support", "triage", "customer", "reply", "replies"]
 SUPPORT_INSTRUCTIONS = "Triage support tickets, flag urgent issues, and prepare helpful local reply drafts using help-document evidence. Cite ticket and document IDs. Never claim drafts were sent."
@@ -74,7 +79,7 @@ def infer_capabilities(lower):
         return picks
     if not any(w in lower for w in SUPPORT_WORDS + ["draft"]):
         raise Error(
-            "I couldn't match that to a capability. Pick one from the list, or say what the agent should make or analyze: a slideshow, a document, data, or web research.",
+            "I couldn't match that to a capability. Pick tools from the list, or say what the agent should do: slides, documents, data, web research, meetings, emails or tasks.",
             422,
             "unsupported_capability",
         )
@@ -197,15 +202,13 @@ def message(c, app, actor, id, data):
         for w in [
             "github",
             "salesforce",
-            "send email",
             "slack",
-            "calendar",
             "study",
             "exam",
         ]
     ):
         raise Error(
-            "This sandbox supports support-ticket search, help documents, and local reply drafts. External integrations and study content are not connected.",
+            "That needs an outside integration that is not connected. Agents can make slides, documents, data analysis, web summaries, meeting invites, email drafts and task lists; nothing is sent.",
             422,
             "unsupported_capability",
         )
@@ -342,7 +345,7 @@ def confirm(c, actor, id, data):
     check_manager(c, actor, spec["department_id"], spec["manager_id"])
     check_bindings(c, actor, spec["department_id"], spec["bindings"])
     if p["kind"] == "hire":
-        agent = new_agent(c, actor, spec)
+        agent = new_agent(c, actor, spec, creator_id=p.get("actor_id"))
     else:
         agent = get(c, "agents", p["target_agent_id"])
         manage(actor, agent)
@@ -518,7 +521,16 @@ def archive(c, actor, id):
     from ..runtime import TERMINAL, cancel
 
     agent = get(c, "agents", id)
-    manage(actor, agent)
+    in_org(actor, agent)
+    # The assigned manager, an admin, or the person who created the agent may remove it.
+    require(
+        "admin" in actor["roles"]
+        or ("manager" in actor["roles"] and actor["id"] == agent["manager_id"])
+        or actor["id"] == agent.get("creator_id"),
+        "Only the agent's creator, its manager or an admin can remove it.",
+        403,
+        "permission_denied",
+    )
     if agent["status"] == "archived":
         return agent
     # cancel refuses in-flight tool calls. The transaction rolls back all changes on refusal.

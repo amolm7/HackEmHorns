@@ -61,7 +61,7 @@ def gemini_schema(schema):
 
 def gemini_generate(config, contents, instruction, tools=None, structured=False):
     key = config.get("GEMINI_API_KEY", "")
-    model = config.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = config.get("GEMINI_MODEL", "gemini-3.8-flash")
     require(
         bool(key),
         "Set GEMINI_API_KEY in .env and restart for live Gemini.",

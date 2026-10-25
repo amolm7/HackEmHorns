@@ -52,7 +52,17 @@ class ConnectionPatch(Input):
 
 
 class PolicyPatch(Input):
-    require_all_approvals: bool
+    require_all_approvals: bool | None = None
+    approval_scope: Literal["agent", "action"] | None = None
+
+    @model_validator(mode="after")
+    def something(self):
+        if not self.model_fields_set:
+            raise ValueError("Provide require_all_approvals or approval_scope")
+        for name in self.model_fields_set:
+            if getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
 
 
 class ListingCreate(Input):

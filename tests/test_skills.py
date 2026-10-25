@@ -44,7 +44,7 @@ class SkillTests(unittest.TestCase):
             "POST",
             f"recruiter/conversations/{conv['id']}/messages",
             {"message": "slides", "department_id": "support", "manager_id": "pavan",
-             "capability_ids": ["make-slideshow", "schedule-meetings"]},
+             "capability_ids": ["make-slideshow", "schedule-meetings"], "model_profile_id": "meta"},
         )["proposal"]
         agent = self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="h")
         self.app.config["MODEL_API_KEY"] = "test-key"
@@ -56,6 +56,8 @@ class SkillTests(unittest.TestCase):
         self.assertIn("[Schedule meetings]", seen["instruction"])
         self.assertIn("takeaway", seen["instruction"])
         self.assertNotIn("[Draft emails]", seen["instruction"])
+        self.assertIn("approved you only to build slide decks and prepare meeting invites", seen["instruction"])
+        self.assertIn("do not substitute a plain-text answer", seen["instruction"])
 
     def test_outline_layouts_stats_notes_and_theme(self):
         slides = mcp.parse_outline("# Deck\n> A promise\n# Win\nstat: 38% | faster\nstat: 5 days | to onboard\nnotes: say this\n# Quote\n> Big idea\n# List\n- a\n- b")
@@ -89,31 +91,80 @@ class SkillTests(unittest.TestCase):
         a = demo.meeting_args("Set up a 30-minute kickoff with sam@acme.com next Tuesday at 2pm", datetime(2026, 10, 25))
         self.assertEqual((a["title"], a["start"], a["attendees"]), ("Kickoff", "2026-10-27T14:00", "sam@acme.com"))
 
-    def test_demo_run_saves_meeting_and_waits_for_email_approval(self):
-        conv = self.call("POST", "recruiter/conversations", {})
+    def agent(self, caps, user="pavan", model="demo"):
+        conv = self.call("POST", "recruiter/conversations", {}, user)
         p = self.call(
             "POST",
             f"recruiter/conversations/{conv['id']}/messages",
-            {"message": "meetings and email", "department_id": "support", "manager_id": "pavan",
-             "capability_ids": ["schedule-meetings", "draft-email"], "mode": "demo"},
+            {"message": "agent", "department_id": "support", "manager_id": "pavan",
+             "capability_ids": caps, "model_profile_id": model},
+            user,
         )["proposal"]
-        agent = self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="h2")
-        run = self.call("POST", f"agents/{agent['id']}/runs",
-                        {"task": "Schedule a 30-minute kickoff with sam@acme.com tomorrow at 3pm", "mode": "demo"}, key="r2")
+        return self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="h:" + p["id"])
+
+    def run_task(self, agent, task, key, **extra):
+        run = self.call("POST", f"agents/{agent['id']}/runs", {"task": task, **extra}, key=key)
+        for _ in range(10):
+            self.app.runtime.tick()
+        return self.call("GET", f"runs/{run['id']}")
+
+    def test_approved_agent_runs_tasks_without_per_action_review(self):
+        agent = self.agent(["schedule-meetings", "draft-email"])
+        run = self.run_task(agent, "Schedule a 30-minute kickoff with sam@acme.com tomorrow at 3pm", "r1")
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(self.call("GET", "approvals?status=pending"), [])
+        kinds = [s["data"]["result"]["kind"] for s in self.call("GET", f"runs/{run['id']}/steps") if s["kind"] == "tool"]
+        self.assertEqual(kinds, ["meeting", "email"])
+        self.assertEqual(self.call("GET", "policy")["approval_scope"], "agent")
+
+    def test_admin_can_switch_back_to_per_action_review(self):
+        self.call("PATCH", "policy", {"approval_scope": "action"}, user="amol")
+        agent = self.agent(["schedule-meetings", "draft-email"])
+        run = self.call("POST", f"agents/{agent['id']}/runs", {"task": "Schedule a kickoff tomorrow at 3pm"}, key="r2")
         for _ in range(4):
             self.app.runtime.tick()
-        first = self.call("GET", "approvals?status=pending")
-        self.assertEqual([a["action"]["tool_id"] for a in first], ["schedule_meeting"])
-        self.assertIn("meeting invite", first[0]["action"]["summary"].lower())
-        self.call("POST", f"approvals/{first[0]['id']}/decision", {"decision": "approve", "comment": ""}, key="d1")
-        for _ in range(6):
-            self.app.runtime.tick()
-        second = self.call("GET", "approvals?status=pending")
-        self.assertEqual([a["action"]["tool_id"] for a in second], ["draft_email"])
-        meeting = [s["data"]["result"] for s in self.call("GET", f"runs/{run['id']}/steps") if s["kind"] == "tool"][0]
-        self.assertEqual(meeting["kind"], "meeting")
-        self.assertFalse(meeting["sent"])
-        self.assertEqual(meeting["attendees"], ["sam@acme.com"])
+        pending = self.call("GET", "approvals?status=pending")
+        self.assertEqual([a["action"]["tool_id"] for a in pending], ["schedule_meeting"])
+        self.assertIn("meeting invite", pending[0]["action"]["summary"].lower())
+        with self.assertRaises(Exception):
+            self.call("PATCH", "policy", {"approval_scope": "action"}, user="pavan")
+
+    def test_hiring_still_needs_manager_approval(self):
+        conv = self.call("POST", "recruiter/conversations", {}, "shaun")
+        p = self.call(
+            "POST",
+            f"recruiter/conversations/{conv['id']}/messages",
+            {"message": "slides", "department_id": "support", "manager_id": "pavan", "capability_ids": ["make-slideshow"]},
+            "shaun",
+        )["proposal"]
+        with self.assertRaises(Exception):
+            self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, user="shaun", key="s1")
+        agent = self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="s2")
+        self.assertEqual((agent["creator_id"], agent["approved_by"]), ("shaun", "pavan"))
+        return agent
+
+    def test_model_is_fixed_when_the_agent_is_created(self):
+        agent = self.agent(["write-document"])
+        run = self.run_task(agent, "Write a brief about onboarding", "m1")
+        self.assertEqual(run["mode"], "demo")
+        self.app.config["MODEL_API_KEY"] = "test-key"
+        with self.assertRaises(Exception) as caught:
+            self.call("POST", f"agents/{agent['id']}/runs", {"task": "Again", "mode": "meta"}, key="m2")
+        self.assertEqual(getattr(caught.exception, "code", None) or caught.exception.args[-1], "model_fixed")
+
+    def test_agent_tools_are_limited_to_its_skills(self):
+        agent = self.agent(["make-slideshow"])
+        run = self.run_task(agent, "Make a 3-slide deck about onboarding and email it to sam@acme.com", "t1")
+        tools = [s["label"] for s in self.call("GET", f"runs/{run['id']}/steps") if s["kind"] == "tool"]
+        self.assertEqual(tools, ["create_slideshow"])
+
+    def test_creator_manager_or_admin_can_remove_an_agent(self):
+        agent = self.test_hiring_still_needs_manager_approval()
+        with self.assertRaises(Exception):
+            self.call("DELETE", f"agents/{agent['id']}", user="member")
+        removed = self.call("DELETE", f"agents/{agent['id']}", user="shaun")
+        self.assertEqual(removed["status"], "archived")
+        self.assertNotIn(agent["id"], [a["id"] for a in self.call("GET", "agents")])
 
     def test_gemini_function_schemas_drop_fields_gemini_rejects(self):
         from backend.runtime.model import gemini_schema
