@@ -8,9 +8,20 @@ from .schemas import (
     PolicyPatch,
     ListingCreate,
     ListingInstall,
+    GitHubConnect,
 )
 
 router = APIRouter(prefix="/api", tags=["Registry & marketplace"])
+
+
+@router.get("/integrations/github")
+def github_status(ctx: Context) -> dict:
+    return ctx.dispatch()
+
+
+@router.post("/integrations/github/connect")
+def github_connect(body: GitHubConnect, ctx: Context) -> dict:
+    return ctx.dispatch(body)
 
 
 @router.get("/me", tags=["Identity"])

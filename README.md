@@ -15,7 +15,7 @@ python server.py
 
 Open **http://localhost:8000**. Database state persists in `data/workforce.sqlite3`. Start one application process per database. Use the VS Code `Run backend` task or run the command from its terminal.
 
-Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 53 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
+Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 55 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
 
 The server binds to localhost. Set `AUTH_MODE=password` after provisioning an account with `scripts/create_user.py` for real username/password sign-in. Without that setting, the identity selector remains a **local development impersonation facility**. Production mode refuses development authentication. See [backend operations](docs/OPERATIONS.md) for setup, recovery, limits and deployment prerequisites.
 
@@ -92,9 +92,27 @@ See **docs/API.md** for all endpoints and payloads, and **docs/IMPLEMENTATION.md
 
 ## Scope
 
+### GitHub demo: connect in the UI, then combine capabilities
+
+GitHub is a pre-registered **read-only MCP adapter**. Prepare the connector before the demo. During the demo, a manager or admin creates a named Library tool backed by that ready connector; the UI does not generate an arbitrary executable integration.
+
+1. Create a fine-grained GitHub personal access token with access to the repositories you want to demonstrate. Grant **Contents: read** and **Issues: read**. Add `GITHUB_PERSONAL_ACCESS_TOKEN=...` to your local ignored `.env`, then restart the server. Do not paste the token into the app, a task, or Git.
+2. Before the demo, run `.venv/bin/python scripts/prepare_github.py --repository github/github-mcp-server --department support --department engineering`. This tests the connector and saves its department access without creating any Library tool.
+3. During the demo, sign in as a manager or admin and scroll to **Add a tool** at the bottom of Library. Enter a name and description, choose **GitHub · connected**, select a department, and click **Add tool**. No existing action checkboxes or connection setup are needed.
+3. Click **Use** on **Read GitHub repositories**. Add **Make a slideshow** and/or **Write a document** to the agent. Choose an enabled **Meta or Gemini** model and create it. A builder's agent still needs manager confirmation.
+5. In the agent chat, enter a GitHub repository URL in the repository field. This can differ from the setup test repository, provided the configured token permits access.
+6. Send: **“Read the README and open issues. Save a 5-slide briefing covering the purpose, current priorities, risks, and next steps. Cite source URLs and distinguish facts from recommendations.”**
+7. Show the actual GitHub tool evidence and the saved slides. Start **New conversation** to choose another repository; follow-ups keep their repository context. You can also share the agent template through its menu.
+
+The service uses GitHub's hosted MCP endpoint, with a read-only header and an application allowlist of `get_file_contents` and `list_issues`. GitHub enforces token access on each read. Calls read a selected file/directory or up to ten issues, with bounded output; this is not a complete repository audit. Nothing executes repository code or modifies GitHub. Revoking the connection blocks its agents. Changing the token requires reconnecting from Library.
+
+Setup currently shares one server-managed token across the departments an admin enables. It is not per-user OAuth or a GitHub App installation. Use a dedicated token containing only data approved for those departments and for the selected model provider.
+
+References: [GitHub hosted MCP](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md), [read-only/tool configuration](https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md), [GitHub token setup](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+
 Implemented: one seeded company, password sessions or explicit development identities, two departments, ten curated capabilities, configurable agent/action approval, Intern/Associate controls, durable pause/resume, revisions, model function calls, company marketplace, portable installs, local validations, spec versions, task outcomes, traces, audit events, and measured reuse.
 
-Not implemented: enterprise SSO/OAuth/vault integrations, external customer systems, arbitrary MCP discovery, public/global marketplace, security certification, Senior summaries, Lead delegation, Ollama, dollar-cost accounting, or distributed workers. Password sessions, authenticated activity streaming and CI dependency scanning are implemented. Connection resolution is backend-only for the bundled sandbox; no third-party account is connected. Fictional tickets/docs are explicitly labeled. Capability write validation checks discovery plus a read fixture; it does not silently perform an unreviewed write or certify general behavior.
+Not implemented: enterprise SSO/OAuth/vault integrations, external customer systems, arbitrary MCP discovery, public/global marketplace, security certification, Senior summaries, Lead delegation, Ollama, dollar-cost accounting, or distributed workers. Password sessions, authenticated activity streaming and CI dependency scanning are implemented. Connection resolution is backend-only. GitHub reading is available after an admin connects a server-managed token; the remaining integrations use the bundled sandbox. Fictional tickets/docs are explicitly labeled. Capability write validation checks discovery plus a read fixture; it does not silently perform an unreviewed write or certify general behavior.
 
 References: [Meta tool calling](https://dev.meta.ai/docs/tool-calling), [Meta structured output](https://dev.meta.ai/docs/structured-output), [Meta quickstart](https://dev.meta.ai/docs/quickstart), [Gemini generateContent](https://ai.google.dev/api/generate-content), [MCP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports).
 
@@ -138,3 +156,5 @@ Every capability carries a short **skill**: a playbook for doing that kind of wo
 - **Deleting agents.** The creator, the assigned manager or an admin can delete an agent from its `…` menu. Unfinished tasks stop; history stays in the audit trail (`DELETE /api/agents/{id}`, a soft archive).
 
 See [the security and track review](docs/SECURITY-REVIEW.md) for verified fixes, checks, and remaining production gaps.
+
+See [the engineering backlog and handoff](docs/ENGINEERING-BACKLOG.md) for the October 25 scan, the observed tool-budget failure, and prioritized issues with reproduction steps and acceptance criteria.
