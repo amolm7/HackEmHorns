@@ -370,6 +370,8 @@ class Application:
                 return reviews.detail(c, actor, p[2])
             if len(p) == 4 and p[3] == "decision" and method == "POST":
                 return reviews.decide(c, actor, p[2], d)
+        if path == "employees" and method == "GET":
+            return reviews.employees(c, actor)
         if path == "leaderboard" and method == "GET":
             return reviews.leaderboard(c, actor)
         if path == "audit" and method == "GET":

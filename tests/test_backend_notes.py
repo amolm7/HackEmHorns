@@ -22,6 +22,24 @@ class BackendNotesTests(unittest.TestCase):
         self.client = TestClient(create_app(self.app, start_worker=False), base_url="http://localhost")
         self.client.__enter__()
 
+    def test_employee_reporting_is_manager_only_and_scoped(self):
+        self.assertEqual(self.client.get("/api/employees", headers={"X-Dev-User": "shaun"}).status_code, 403)
+        response = self.client.get("/api/employees", headers={"X-Dev-User": "pavan"})
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()["employees"]
+        self.assertIn("shaun", [r["id"] for r in rows])
+        self.assertNotIn("other-org", [r["id"] for r in rows])
+        self.assertTrue(all("password_hash" not in r for r in rows))
+
+    def test_configured_employee_and_manager_roles(self):
+        from scripts.configure_team import configure
+        configure(self.app.db)
+        self.assertEqual(self.client.get("/api/employees", headers={"X-Dev-User": "pavan"}).status_code, 403)
+        response = self.client.get("/api/employees", headers={"X-Dev-User": "shaun"})
+        self.assertEqual(response.status_code, 200)
+        pavan = next(r for r in response.json()["employees"] if r["id"] == "pavan")
+        self.assertEqual(pavan["roles"], ["builder"])
+
     def tearDown(self):
         self.client.__exit__(None, None, None)
         self.app.close()

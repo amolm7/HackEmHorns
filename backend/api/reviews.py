@@ -53,3 +53,8 @@ def leaderboard(ctx: Context) -> dict:
 @router.get("/audit")
 def audit(ctx: Context) -> list[dict]:
     return ctx.dispatch()
+
+
+@router.get("/employees")
+def employees(ctx: Context) -> dict:
+    return ctx.dispatch()

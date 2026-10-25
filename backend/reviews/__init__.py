@@ -362,3 +362,34 @@ def leaderboard(c, actor):
         ],
         "hours_saved": None,
     }
+
+
+def employees(c, actor):
+    """Department-scoped manager reporting, without prompts or credentials."""
+    roles(actor, "manager", "admin")
+    agents = []
+    for agent in all_rows(c, "agents"):
+        if agent["org_id"] != actor["org_id"]:
+            continue
+        try:
+            visible_agent(actor, agent)
+        except Error:
+            continue
+        agents.append(agent)
+    allowed = {a["id"] for a in agents}
+    runs = [r for r in all_rows(c, "runs") if r["org_id"] == actor["org_id"] and r["agent_id"] in allowed]
+    scores = {r["agent_id"]: r for r in leaderboard(c, actor)["agents"]}
+    rows = []
+    for employee in all_rows(c, "users"):
+        if employee["org_id"] != actor["org_id"] or not set(employee["roles"]) & {"builder", "member", "manager", "admin"}:
+            continue
+        if "admin" not in actor["roles"] and not set(employee["department_ids"]) & set(actor["department_ids"]):
+            continue
+        owned = [a for a in agents if a["creator_id"] == employee["id"]]
+        used = [r for r in runs if r["actor_id"] == employee["id"]]
+        rows.append({"id": employee["id"], "name": employee["name"], "roles": employee["roles"], "active": employee.get("active", True),
+            "agents": [{"id": a["id"], "name": a["name"], "status": a["status"], "performance": scores.get(a["id"])} for a in owned],
+            "runs": len(used), "completed": sum(r["status"] == "completed" for r in used), "failed": sum(r["status"] == "failed" for r in used),
+            "input_tokens": sum(r.get("usage", {}).get("input_tokens", 0) for r in used), "output_tokens": sum(r.get("usage", {}).get("output_tokens", 0) for r in used),
+            "last_active": max((r["created_at"] for r in used), default=None)})
+    return {"employees": sorted(rows, key=lambda r: (-r["runs"], r["name"])), "scope": "Your accessible departments", "ranking": "Task volume; quality scores require at least 3 rated tasks."}

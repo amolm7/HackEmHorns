@@ -214,3 +214,9 @@ Analysis workflows require a CSV source in the brief. `POST /work-queue/sample-b
 Job results include `quality` (`passed`, individual checks, limits), artifacts, ownership, outcome and timestamps. A final run with missing/invalid deliverables gets `error_code=deliverable_validation` after at most one live repair attempt. Retryable provider errors preserve `retry_count` and `next_attempt_at`; exhaustion produces `error_code=retry_exhausted`. Rerun corrected/failed jobs through assignment; prior attempt IDs and deliverables remain available.
 
 `GET /auth/config` is public and exposes only the authentication mode. `/health` and `/ready` are public liveness/readiness probes. Readiness is not an assertion of deployment security.
+
+## Employee reporting
+
+`GET /employees` requires manager/admin access. Returns department-scoped employees, their created agents and existing quality scores, run counts by executing employee, completed/failed counts, last task time, and provider-reported token totals. Task volume ranking does not imply quality or measured time savings. Prompts, credentials, and artifact contents are excluded.
+
+For the local demo team, run `.venv/bin/python scripts/configure_team.py`: Pavan becomes a builder (employee), Shaun becomes manager/builder for both departments, and agents previously assigned to Pavan move to Shaun. Existing passwords are unchanged. Shaun needs his own provisioned account using `scripts/create_user.py`. This explicit setup does not alter default test fixtures.

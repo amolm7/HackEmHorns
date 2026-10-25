@@ -74,6 +74,7 @@ async function load() {
   const vals = await Promise.all(paths.map(p => api(p)));
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
   if (authMode === "password") { user = S.me.id; $("#identity").disabled = true; if (!$("#sign-out")) { const b = document.createElement("button"); b.id = "sign-out"; b.className = "btn small"; b.textContent = "Sign out"; b.setAttribute("aria-label", "Sign out"); b.addEventListener("click", async () => { await api("auth/logout", "POST", {}); location.reload(); }); $("#identity").closest("label").after(b); } }
+  S.employees = S.me.roles.some(r => ["manager", "admin"].includes(r)) ? await api("employees") : null;
   S.approvals = await api("approvals").catch(() => []);
   S.proposals = await api("recruiter/proposals").catch(() => []);
   if (route().name === "agent") await loadSteps();
@@ -157,7 +158,7 @@ const profile = id => S["model-profiles"].find(m => m.id === id);
 const modelLabel = id => (id === "demo" ? "Demo" : profile(id)?.name || id);
 const alone = a => a.level !== "intern";
 const defaultDept = () => S.me.department_ids[0] || "support";
-const defaultManager = () => (isManager() ? user : "pavan");
+const defaultManager = () => isManager() ? user : (S.me.manager_id || S["dev/users"].find(u => u.roles.includes("manager") && u.department_ids.includes(defaultDept()))?.id);
 const capsOf = a => (a.bindings.length ? a.bindings.map(b => b.capability_id) : (a.required_capabilities || []).map(c => c.id)).map(id => capById(id)).filter(Boolean);
 const TOOL_VERB = { create_slideshow: "build a slideshow", create_document: "write a document", analyze_data: "analyze your data", read_url: "read a web page", search_tickets: "search support tickets", search_docs: "search help documents", create_draft: "save a reply draft", schedule_meeting: "schedule a meeting", draft_email: "draft an email", create_task_list: "make a task list" };
 const RISK = { read: "reads only", local_write: "saves in your workspace", always_approve: "always asks" };
@@ -197,10 +198,10 @@ function route() {
   const alias = { create: "new", hire: "new", work: "new", home: "new", agents: "new", arcade: "new", queue: "inbox", approvals: "inbox", scores: "leaderboard", shop: "library" };
   return { name: alias[raw] || raw || "new", id };
 }
-const TITLES = { new: "New agent", inbox: "Approvals", leaderboard: "Leaderboard", library: "Library", jobs: "Team jobs" };
+const TITLES = { new: "New agent", inbox: "Approvals", leaderboard: "Leaderboard", library: "Library", jobs: "Team jobs", employees: "Employees" };
 function render() {
   const r = route();
-  const views = { new: forgeScreen, agent: chatScreen, inbox: inboxScreen, leaderboard: leaderboardScreen, library: libraryScreen, jobs: jobsScreen };
+  const views = { new: forgeScreen, agent: chatScreen, inbox: inboxScreen, leaderboard: leaderboardScreen, library: libraryScreen, jobs: jobsScreen, employees: employeesScreen };
   document.body.dataset.view = r.name;
   $("#view").innerHTML = (views[r.name] || forgeScreen)(r.id);
   document.title = (r.name === "agent" ? agentById(r.id)?.name || "Agent" : TITLES[r.name] || "New agent") + " · ORBIT";
@@ -233,13 +234,16 @@ function sidebar() {
     (lastUsed.get(a.id) || Date.parse(a.created_at) || 0)
   );
   stableSidebar("#agent-list", recentAgents.length ? recentAgents.map(a => { const st = agentState(a); return `<li><a href="#/agent/${esc(a.id)}" data-id="${esc(a.id)}">${orb(a.id, { size: 24, level: a.level })}<span class="nm">${esc(a.name)}</span>${st ? `<span class="st ${st}" title="${st === "waiting" ? "Needs your approval" : st === "working" ? "Working" : "Needs setup"}"></span>` : ""}</a></li>`; }).join("") : `<li class="none">No agents yet</li>`);
+  const managerNav = $("#manager-nav");
+  managerNav.hidden = !S.me.roles.some(r => ["manager", "admin"].includes(r));
+  stableSidebar("#manager-nav", managerNav.hidden ? "" : `<a class="employees-nav" href="#/employees" data-route="employees">${icon("jobs")}<span><b>Employees</b><small>Team overview & usage</small></span><span aria-hidden="true">↗</span></a>`);
   stableSidebar("#side-links", [["inbox", "inbox", "Approvals", pending], ["leaderboard", "trophy", "Leaderboard", 0], ["library", "library", "Library", 0], ["jobs", "jobs", "Team jobs", jobs]].map(([r, ic, t, n]) => `<li><a href="#/${r}" data-route="${r}">${icon(ic)}<span class="nm">${t}</span>${n ? `<span class="count ${r === "inbox" ? "warn" : ""}">${n}</span>` : ""}</a></li>`).join(""));
   sidebarActive();
 }
 function sidebarActive() {
   const r = route();
   $$("#agent-list a").forEach(a => a.toggleAttribute("aria-current", r.name === "agent" && a.dataset.id === r.id));
-  $$("#side-links a").forEach(a => a.toggleAttribute("aria-current", a.dataset.route === r.name));
+  $$("#side-links a, #manager-nav a").forEach(a => a.toggleAttribute("aria-current", a.dataset.route === r.name));
   $("#new-agent")?.toggleAttribute("aria-current", r.name === "new");
 }
 
@@ -446,6 +450,16 @@ function inboxScreen() {
     ${drafts.length ? `<h2 class="section">Agents waiting to be confirmed</h2><ul class="lines">${drafts.map(p => { const ok = S.me.roles.includes("admin") || (S.me.roles.includes("manager") && p.spec.manager_id === user); return `<li>${orb(p.id, { size: 26 })}<span><b>${esc(p.spec.name)}</b> <span class="note">${esc(p.spec.capability_ids.map(id => capById(id)).filter(Boolean).map(short).join(", "))} · ${esc(userName(p.spec.manager_id))} confirms</span></span><button class="btn small ${ok ? "primary" : ""}" data-act="confirm-draft" data-id="${esc(p.id)}" data-rev="${p.revision}" ${ok ? "" : "disabled"}>Confirm</button></li>`; }).join("")}</ul>` : ""}
     ${past.length ? `<details class="quiet history"><summary>History (${past.length})</summary><ul class="lines">${past.slice().reverse().slice(0, 25).map(a => `<li><span class="dot ${a.status === "approved" ? "ok" : a.status === "rejected" ? "bad" : "warn"}"></span><span><b>${esc(agentById(a.agent_id)?.name || "Agent")}</b> <span class="note">${esc(TOOL_VERB[a.action.tool_id] || a.action.tool_id)} · ${esc(a.status.replace(/_/g, " "))}</span></span><time>${clock(a.decided_at || a.updated_at || a.created_at)}</time></li>`).join("")}</ul></details>` : ""}
   </div>`;
+}
+
+const expandedEmployees = new Set();
+document.addEventListener("toggle", event => {
+  const id = event.target.dataset?.employee;
+  if (id) { if (event.target.open) expandedEmployees.add(id); else expandedEmployees.delete(id); }
+}, true);
+function employeesScreen() {
+  if (!S.employees) return '<div class="page"><h1>Manager access required</h1></div>';
+  return `<div class="page"><h1 class="display">Employees</h1><p class="lede">Your people, their agents, and the work they put in motion.</p><p class="note">${esc(S.employees.scope)} · Ranked by task volume. Completed tasks are not necessarily accepted results.</p><div class="employee-grid">${S.employees.employees.map((e, i) => `<details class="employee-card" data-employee="${esc(e.id)}" ${expandedEmployees.has(e.id) ? "open" : ""}><summary><span class="employee-avatar" aria-hidden="true">${esc(e.name[0])}</span><span class="employee-heading"><b>${esc(e.name)}</b><span class="note">${esc(e.roles.includes("manager") || e.roles.includes("admin") ? "Manager" : "Developer")}${e.active ? "" : " · Disabled"}</span></span><span class="employee-preview">${e.agents.length} agents <span>·</span> ${e.runs} tasks</span><span class="employee-chevron" aria-hidden="true">⌄</span></summary><div class="employee-detail"><div class="employee-metrics"><span><b>${e.agents.length}</b>Agents created</span><span><b>${e.runs}</b>Tasks run</span><span><b>${e.completed}</b>Completed</span><span><b>${e.failed}</b>Failed</span></div><p class="note">${e.input_tokens.toLocaleString()} input / ${e.output_tokens.toLocaleString()} output tokens · Provider-reported usage</p><p class="note">Last task: ${e.last_active ? esc(new Date(e.last_active).toLocaleString()) : "No activity yet"}</p><ul class="employee-agents">${e.agents.map(a => `<li><a href="#/agent/${esc(a.id)}">${esc(a.name)}</a><span class="note">${esc(a.status)} · ${a.performance?.result_eligible ? pct(a.performance.task_success_rate) + " rated good" : "Not enough ratings"}</span></li>`).join("") || '<li class="note">No agents created yet</li>'}</ul></div></details>`).join("")}</div></div>`;
 }
 
 /* ---------- leaderboard ---------- */
