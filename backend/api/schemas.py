@@ -75,22 +75,6 @@ class ListingInstall(Input):
     manager_id: Text | None = None
 
 
-class RecruiterMessage(Input):
-    message: LongText
-    name: Text | None = None
-    job_description: LongText | None = None
-    instructions: Annotated[str, Field(min_length=1, max_length=8000)] | None = None
-    department_id: Text | None = None
-    manager_id: Text | None = None
-    mode: Mode = "demo"
-    model_profile_id: Mode | None = None
-    connection_id: Text | None = None
-    capability_ids: Annotated[list[Text], Field(min_length=1, max_length=10)] | None = (
-        None
-    )
-    target_agent_id: Text | None = None
-
-
 class ProposalConfirm(Input):
     revision: Annotated[int, Field(ge=1)]
 

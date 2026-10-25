@@ -29,23 +29,17 @@ class FastAPITransportTests(unittest.TestCase):
         )
 
     def hire(self):
-        conversation = self.post("recruiter/conversations", {}).json()
         result = self.post(
-            f"recruiter/conversations/{conversation['id']}/messages",
+            "agents/quick-create",
             {
-                "message": "Hire a support agent to triage and draft replies",
+                "description": "Hire a support agent to triage and draft replies",
                 "department_id": "support",
                 "manager_id": "pavan",
             },
         )
         self.assertEqual(result.status_code, 200, result.text)
-        proposal = result.json()["proposal"]
-        result = self.post(
-            f"recruiter/proposals/{proposal['id']}/confirm",
-            {"revision": proposal["revision"]},
-        )
-        self.assertEqual(result.status_code, 200, result.text)
-        return result.json()
+        self.assertEqual(result.json()["status"], "created")
+        return result.json()["agent"]
 
     def test_work_queue_http_assignment(self):
         agent = self.hire()
@@ -78,7 +72,7 @@ class FastAPITransportTests(unittest.TestCase):
                 for path in schema["paths"].values()
                 for method in path
             ),
-            59,
+            53,
         )
         run = schema["paths"]["/api/agents/{agent_id}/runs"]["post"]
         self.assertEqual(
@@ -135,27 +129,27 @@ class FastAPITransportTests(unittest.TestCase):
         )
         self.assertEqual(
             self.client.post(
-                "/api/recruiter/conversations",
+                "/api/agents/quick-create",
                 content="{}",
                 headers={"Content-Type": "text/plain"},
             ).status_code,
             415,
         )
         result = self.client.post(
-            "/api/recruiter/conversations",
+            "/api/agents/quick-create",
             content=b"x" * 50001,
             headers={"Content-Type": "application/json"},
         )
         self.assertEqual(result.status_code, 413)
         result = self.client.post(
-            "/api/recruiter/conversations",
+            "/api/agents/quick-create",
             content=iter([b"x" * 25000, b"x" * 25001]),
             headers={"Content-Type": "application/json"},
         )
         self.assertEqual(result.status_code, 413)
         self.assertEqual(
             self.client.post(
-                "/api/recruiter/conversations",
+                "/api/agents/quick-create",
                 content="{broken",
                 headers={"Content-Type": "application/json"},
             ).status_code,

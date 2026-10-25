@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from tests.recruit import propose
 from backend.app import Application
 from backend.registry import CAPS, playbooks_for, TOOLS
 from backend.runtime import mcp, demo
@@ -39,13 +40,11 @@ class SkillTests(unittest.TestCase):
             seen["instruction"] = instruction
             return {"role": "model", "parts": [{"text": "Done."}]}, {}
 
-        conv = self.call("POST", "recruiter/conversations", {})
-        p = self.call(
-            "POST",
-            f"recruiter/conversations/{conv['id']}/messages",
+        p = propose(
+            self.app,
             {"message": "slides", "department_id": "support", "manager_id": "pavan",
              "capability_ids": ["make-slideshow", "schedule-meetings"], "model_profile_id": "meta"},
-        )["proposal"]
+        )[1]["proposal"]
         agent = self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="h")
         self.app.config["MODEL_API_KEY"] = "test-key"
         with patch("backend.runtime.model.generate", fake):
@@ -92,14 +91,12 @@ class SkillTests(unittest.TestCase):
         self.assertEqual((a["title"], a["start"], a["attendees"]), ("Kickoff", "2026-10-27T14:00", "sam@acme.com"))
 
     def agent(self, caps, user="pavan", model="demo"):
-        conv = self.call("POST", "recruiter/conversations", {}, user)
-        p = self.call(
-            "POST",
-            f"recruiter/conversations/{conv['id']}/messages",
+        p = propose(
+            self.app,
             {"message": "agent", "department_id": "support", "manager_id": "pavan",
              "capability_ids": caps, "model_profile_id": model},
             user,
-        )["proposal"]
+        )[1]["proposal"]
         return self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="h:" + p["id"])
 
     def run_task(self, agent, task, key, **extra):
@@ -130,13 +127,11 @@ class SkillTests(unittest.TestCase):
             self.call("PATCH", "policy", {"approval_scope": "action"}, user="pavan")
 
     def test_hiring_still_needs_manager_approval(self):
-        conv = self.call("POST", "recruiter/conversations", {}, "shaun")
-        p = self.call(
-            "POST",
-            f"recruiter/conversations/{conv['id']}/messages",
+        p = propose(
+            self.app,
             {"message": "slides", "department_id": "support", "manager_id": "pavan", "capability_ids": ["make-slideshow"]},
             "shaun",
-        )["proposal"]
+        )[1]["proposal"]
         with self.assertRaises(Exception):
             self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, user="shaun", key="s1")
         agent = self.call("POST", f"recruiter/proposals/{p['id']}/confirm", {"revision": p["revision"]}, key="s2")

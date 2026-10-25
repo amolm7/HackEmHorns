@@ -18,11 +18,6 @@ def approvals(
     return ctx.dispatch()
 
 
-@router.get("/approvals/{approval_id}")
-def approval(approval_id: UUID, ctx: Context) -> dict:
-    return ctx.dispatch()
-
-
 @router.post("/approvals/{approval_id}/decision")
 def decide_approval(
     approval_id: UUID, body: ReviewDecision, ctx: IdempotentContext

@@ -1,35 +1,13 @@
 from uuid import UUID
 from fastapi import APIRouter
 from .common import Context, IdempotentContext
-from .schemas import Empty, RecruiterMessage, ProposalConfirm, AgentPatch, QuickCreate, AgentCapabilities
+from .schemas import ProposalConfirm, AgentPatch, QuickCreate, AgentCapabilities
 
 router = APIRouter(prefix="/api", tags=["Recruiter & workforce"])
 
 
-@router.post("/recruiter/conversations")
-def start_conversation(body: Empty, ctx: Context) -> dict:
-    return ctx.dispatch(body)
-
-
-@router.get("/recruiter/conversations/{conversation_id}")
-def conversation(conversation_id: UUID, ctx: Context) -> dict:
-    return ctx.dispatch()
-
-
-@router.post("/recruiter/conversations/{conversation_id}/messages")
-def recruiter_message(
-    conversation_id: UUID, body: RecruiterMessage, ctx: Context
-) -> dict:
-    return ctx.dispatch(body)
-
-
 @router.get("/recruiter/proposals")
 def proposals(ctx: Context) -> list[dict]:
-    return ctx.dispatch()
-
-
-@router.get("/recruiter/proposals/{proposal_id}")
-def proposal(proposal_id: UUID, ctx: Context) -> dict:
     return ctx.dispatch()
 
 

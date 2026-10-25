@@ -19,27 +19,6 @@ def inbox(c, actor, status=None):
     ]
 
 
-def detail(c, actor, id):
-    approval = get(c, "approvals", id)
-    in_org(actor, approval)
-    require(
-        "admin" in actor["roles"]
-        or "auditor" in actor["roles"]
-        or (
-            "manager" in actor["roles"]
-            and approval["assigned_manager_id"] == actor["id"]
-        ),
-        "This approval belongs to another manager.",
-        403,
-    )
-    steps = [
-        s
-        for s in all_rows(c, "steps")
-        if s["run_id"] == approval["run_id"] and s["kind"] == "tool"
-    ]
-    return {**approval, "prior_tool_evidence": steps}
-
-
 def decide(c, actor, id, data):
     approval = get(c, "approvals", id)
     agent = get(c, "agents", approval["agent_id"])

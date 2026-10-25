@@ -48,11 +48,6 @@ def create_capability(body: CapabilityCreate, ctx: Context) -> dict:
     return ctx.dispatch(body)
 
 
-@router.get("/capabilities/{capability_id}")
-def capability(capability_id: str, ctx: Context) -> dict:
-    return ctx.dispatch()
-
-
 @router.post("/capabilities/{capability_id}/validate")
 def validate_capability(
     capability_id: str, body: CapabilityValidate, ctx: Context
