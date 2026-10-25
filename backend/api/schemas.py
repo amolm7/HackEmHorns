@@ -33,9 +33,12 @@ class CapabilityCreate(Input):
                 "create_document",
                 "analyze_data",
                 "read_url",
+                "schedule_meeting",
+                "draft_email",
+                "create_task_list",
             ]
         ],
-        Field(min_length=1, max_length=7),
+        Field(min_length=1, max_length=10),
     ]
 
 

@@ -46,6 +46,8 @@ Sandbox connection `support-local` permits Support only. Creating a new departme
 
 Seed capability IDs: `ticket-search`, `help-docs`, `reply-drafts`. Tool IDs: `search_tickets` (read), `search_docs` (read), `create_draft` (always approve). `create_draft` saves a local draft and never sends it.
 
+Workspace capability IDs: `make-slideshow`, `write-document`, `analyze-data`, `research-web`, `schedule-meetings`, `draft-email`, `plan-tasks`. Tool IDs added with the skills release: `schedule_meeting` (`local_write`: title, start `YYYY-MM-DDTHH:MM`, optional `duration_minutes`, `attendees`, `location`, `agenda`; result includes an `ics` string and `sent: false`), `draft_email` (always approve; saved, never sent), `create_task_list` (`local_write`; lines `- task | owner | due`). `create_slideshow` accepts an optional `theme`. Each capability record includes a read-only `skill` playbook string.
+
 Register example:
 
 ```json

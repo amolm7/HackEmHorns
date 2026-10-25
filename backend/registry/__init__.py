@@ -34,11 +34,11 @@ TOOLS = {
     },
     "create_slideshow": {
         "name": "create_slideshow",
-        "description": "Build a slide deck and save it in the workspace. Put each slide's title on a line starting with '# ' and its bullet points on the lines below, starting with '- '. Does not publish or send anything.",
+        "description": "Build a slide deck and save it in the workspace. Put each slide's title on a line starting with '# '. Under it, use '- ' for bullet points (at most 4 short ones), '> ' for one big lead statement, 'stat: 38% | label' for up to 3 headline numbers, and 'notes: ' for speaker notes. Optional theme: aurora, paper, sunrise or mono. Does not publish or send anything.",
         "risk": "local_write",
         "inputSchema": {
             "type": "object",
-            "properties": {"title": {"type": "string"}, "outline": {"type": "string"}},
+            "properties": {"title": {"type": "string"}, "outline": {"type": "string"}, "theme": {"type": "string"}},
             "required": ["title", "outline"],
         },
     },
@@ -50,6 +50,43 @@ TOOLS = {
             "type": "object",
             "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
             "required": ["title", "body"],
+        },
+    },
+    "schedule_meeting": {
+        "name": "schedule_meeting",
+        "description": "Save a meeting invite in the workspace with attendees, time, agenda and a downloadable calendar file (.ics). It cannot see anyone's calendar and does not send the invite. 'start' is a local date and time like 2026-11-03T14:00; 'duration_minutes' is a number of minutes; 'attendees' are names or emails separated by commas; 'agenda' has one item per line.",
+        "risk": "local_write",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "start": {"type": "string"},
+                "duration_minutes": {"type": "string"},
+                "attendees": {"type": "string"},
+                "location": {"type": "string"},
+                "agenda": {"type": "string"},
+            },
+            "required": ["title", "start"],
+        },
+    },
+    "draft_email": {
+        "name": "draft_email",
+        "description": "Save an email draft in the workspace. Does not send anything. Requires human approval at every level.",
+        "risk": "always_approve",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}},
+            "required": ["subject", "body"],
+        },
+    },
+    "create_task_list": {
+        "name": "create_task_list",
+        "description": "Save a task list in the workspace. One task per line starting with '- ', optionally 'task | owner | due date'. Does not assign or notify anyone.",
+        "risk": "local_write",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "tasks": {"type": "string"}},
+            "required": ["title", "tasks"],
         },
     },
     "analyze_data": {
@@ -80,7 +117,10 @@ for _tool_name, _tool in TOOLS.items():
     for _field, _property in _schema["properties"].items():
         _property["maxLength"] = (
             40000 if (_tool_name, _field) == ("create_document", "body")
-            else 200 if _field == "title"
+            else 200 if _field in ("title", "subject")
+            else 40 if _field in ("start", "duration_minutes", "theme")
+            else 500 if _field in ("to", "location")
+            else 1000 if _field == "attendees"
             else 100 if _field == "ticket_id"
             else 2000 if _field == "url"
             else 4000
@@ -88,11 +128,80 @@ for _tool_name, _tool in TOOLS.items():
         if _field in _schema["required"]:
             _property["minLength"] = 1
 
+
+# Skills: short playbooks that say how to do each kind of work well. Live models receive the playbooks
+# for the tools they hold; the app shows them in the Library and on each agent. They are guidance
+# only; tool permissions, approvals and validation are unchanged.
+SKILLS = {
+    "make-slideshow": (
+        "Plan first: the audience, the one message, and 5-8 slides unless the user says otherwise.\n"
+        "Slide 1 is the cover: the title plus one line starting with '> ' that promises what the deck delivers.\n"
+        "Make each slide's title its takeaway as a short sentence ('Onboarding drops from 14 days to 5'), never a bare label ('Onboarding').\n"
+        "Keep every slide to one idea: at most 4 bullets, each under 12 words, parallel wording, no trailing periods.\n"
+        "Vary the layout. Use '> ' for a single big statement, 'stat: 38% | faster onboarding' lines (up to 3) when you have real numbers, and bullets only for true lists.\n"
+        "Use only numbers the user gave you. If you have none, write a statement slide instead of inventing a statistic.\n"
+        "End with a next-steps slide that names an owner or a date when the user supplied one. Add 'notes: ' lines saying what to say out loud.\n"
+        "Pick a theme: aurora (dark, default), paper (light, formal), sunrise (warm, for pitches) or mono (stark, technical)."
+    ),
+    "write-document": (
+        "Open with the answer: two sentences under the title that say what the reader should know or decide.\n"
+        "Use 3-6 '# ' sections a reader can skim; each section's first sentence carries its main point.\n"
+        "Keep paragraphs to four lines or fewer, use bullets only for parallel items, and bold a key term sparingly with **.\n"
+        "Finish with Next steps: who does what, by when, using only owners and dates from the user.\n"
+        "Match the requested length and tone. Do not pad. Never invent facts, figures or quotes; mark gaps as 'To confirm: ...'."
+    ),
+    "analyze-data": (
+        "Restate the question in one line, then check the header row and the units before reading any numbers.\n"
+        "Report the row count, the two or three findings that answer the question (with the numbers), and the one outlier or surprise.\n"
+        "Say what the chart shows in plain words, and state the caveat: small sample, missing values or unclear units.\n"
+        "Never claim a cause the data cannot show. Suggest the next check instead. Do not change or drop the user's rows."
+    ),
+    "research-web": (
+        "Prefer the links the user gave. Read a page before saying anything about it.\n"
+        "Answer the actual question in the first sentence, then give at most five specific bullets, each with its source link.\n"
+        "When pages disagree or one fails to load, say so. Do not retry a failed address.\n"
+        "Paraphrase instead of copying, and quote only a short phrase when exact wording matters. Never invent a source."
+    ),
+    "schedule-meetings": (
+        "Collect the essentials first: purpose, who, when, how long and where or which link. If the date, time or time zone is ambiguous, ask one short question rather than guess.\n"
+        "Title the meeting by its outcome ('Decide Q4 launch date'), not 'Meeting' or 'Sync'.\n"
+        "Default to 30 minutes, or 25 when you want a buffer. Use 50 instead of 60.\n"
+        "Write 3-5 timed agenda lines that add up to the duration. The first item states the goal, the last captures decisions and owners.\n"
+        "List attendees by email when the user gave emails. You cannot see calendars, so never claim anyone is free.\n"
+        "Put the best time in the invite and name one backup time in the agenda notes.\n"
+        "The invite is saved, not sent. Tell the user they can download the calendar file or copy the details."
+    ),
+    "draft-email": (
+        "Subject: the ask or the news in eight words or fewer.\n"
+        "First line says why you are writing. Make one request per email, with a date when timing matters.\n"
+        "Stay under 150 words, with short paragraphs and plain words. Match the user's tone, formal or friendly.\n"
+        "End with a clear next step and a sign-off using a [Your name] placeholder when no name is known.\n"
+        "Never invent facts, commitments or attachments. The draft is saved, not sent."
+    ),
+    "plan-tasks": (
+        "Start every task with a verb and keep it small enough to finish in one sitting. Split anything bigger.\n"
+        "Write one per line as '- task | owner | due'. Use only the owners and dates the user gave; leave them blank otherwise.\n"
+        "Order by dependency, then urgency. Keep it to 12 tasks or fewer, and begin a task with 'Blocked:' when it cannot start yet."
+    ),
+    "ticket-search": (
+        "Search with the customer's distinctive words (product, error text, ticket number) instead of the whole message.\n"
+        "If nothing comes back, try one broader query. Report the ticket ID, its priority and what the customer asked for."
+    ),
+    "help-docs": (
+        "Use only what the document says and name the document. If the documents do not cover the question, say so and recommend escalation. Never improvise policy."
+    ),
+    "reply-drafts": (
+        "Acknowledge the problem in the first sentence, state what policy documents say, give the next step, and ask for any missing details such as account or time window.\n"
+        "Stay under 120 words. Never promise a resolution time or ask for a password. A person reviews and sends it."
+    ),
+}
+
 SUPPORT_TOOLS = {"search_tickets", "search_docs", "create_draft"}
 SELFTEST_CSV = "item,amount\na,1\nb,2\nc,3"
 CAPS = [
     {
         "id": "make-slideshow",
+        "skill": SKILLS["make-slideshow"],
         "name": "Make a slideshow",
         "agent_name": "Slide Builder",
         "tools": ["create_slideshow"],
@@ -107,6 +216,7 @@ CAPS = [
     },
     {
         "id": "write-document",
+        "skill": SKILLS["write-document"],
         "name": "Write a document",
         "agent_name": "Doc Writer",
         "tools": ["create_document"],
@@ -121,6 +231,7 @@ CAPS = [
     },
     {
         "id": "analyze-data",
+        "skill": SKILLS["analyze-data"],
         "name": "Analyze data",
         "agent_name": "Data Analyst",
         "tools": ["analyze_data"],
@@ -135,6 +246,7 @@ CAPS = [
     },
     {
         "id": "research-web",
+        "skill": SKILLS["research-web"],
         "name": "Research & summarize",
         "agent_name": "Researcher",
         "tools": ["read_url"],
@@ -148,7 +260,53 @@ CAPS = [
         "sample_data": False,
     },
     {
+        "id": "schedule-meetings",
+        "skill": SKILLS["schedule-meetings"],
+        "name": "Schedule meetings",
+        "agent_name": "Meeting Planner",
+        "tools": ["schedule_meeting"],
+        "creator_id": "pavan",
+        "icon": "calendar",
+        "group": "Workspace",
+        "connection_id": "workspace-local",
+        "description": "Turn a request into an invite with agenda and a calendar file. Nothing is sent.",
+        "example": "Set up a 30-minute kickoff with sam@acme.com and lee@acme.com next Tuesday at 2pm.",
+        "test_recipe": "workspace-selftest-v1",
+        "sample_data": False,
+    },
+    {
+        "id": "draft-email",
+        "skill": SKILLS["draft-email"],
+        "name": "Draft emails",
+        "agent_name": "Email Drafter",
+        "tools": ["draft_email"],
+        "creator_id": "shaun",
+        "icon": "mail",
+        "group": "Workspace",
+        "connection_id": "workspace-local",
+        "description": "Write clear email drafts you review and send yourself.",
+        "example": "Draft a polite email to sam@acme.com asking for the signed contract by Friday.",
+        "test_recipe": "workspace-selftest-v1",
+        "sample_data": False,
+    },
+    {
+        "id": "plan-tasks",
+        "skill": SKILLS["plan-tasks"],
+        "name": "Plan tasks",
+        "agent_name": "Task Planner",
+        "tools": ["create_task_list"],
+        "creator_id": "amol",
+        "icon": "tasks",
+        "group": "Workspace",
+        "connection_id": "workspace-local",
+        "description": "Turn notes or goals into a short list of clear tasks with owners and dates.",
+        "example": "Turn these meeting notes into action items with owners.",
+        "test_recipe": "workspace-selftest-v1",
+        "sample_data": False,
+    },
+    {
         "id": "ticket-search",
+        "skill": SKILLS["ticket-search"],
         "name": "Support ticket search",
         "agent_name": "Ticket Triage",
         "tools": ["search_tickets"],
@@ -161,6 +319,7 @@ CAPS = [
     },
     {
         "id": "help-docs",
+        "skill": SKILLS["help-docs"],
         "name": "Support knowledge",
         "agent_name": "Help Desk",
         "tools": ["search_docs"],
@@ -173,6 +332,7 @@ CAPS = [
     },
     {
         "id": "reply-drafts",
+        "skill": SKILLS["reply-drafts"],
         "name": "Reply drafting",
         "agent_name": "Reply Drafter",
         "tools": ["create_draft"],
@@ -226,6 +386,17 @@ DOCS = [
 ]
 
 
+def playbooks_for(tool_names):
+    """Skill playbooks for the tools an agent holds, in catalog order, without repeats."""
+    seen, out = set(), []
+    for cap in CAPS:
+        if cap["id"] in seen or not set(cap["tools"]) & set(tool_names):
+            continue
+        seen.add(cap["id"])
+        out.append((cap["name"], cap["skill"]))
+    return out
+
+
 def capability_record(cap):
     return {
         "test_recipe": "support-sandbox-v1",
@@ -250,6 +421,9 @@ def upgrade(c):
             # Fill display metadata added later without touching version, approval or tools.
             row = existing[cap["id"]]
             missing = {k: v for k, v in cap.items() if k not in row}
+            # The playbook is guidance text kept current from code; it carries no permission.
+            if row.get("skill") != cap.get("skill"):
+                missing["skill"] = cap.get("skill")
             if missing:
                 put(c, "capabilities", {**row, **missing})
     if not any(x["id"] == "workspace-local" for x in all_rows(c, "connections")):

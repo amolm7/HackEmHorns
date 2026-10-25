@@ -109,7 +109,7 @@ class WorkspaceTests(unittest.TestCase):
         seed(db)
         with db.transaction() as c:
             ids = {x["id"] for x in all_rows(c, "capabilities")}
-            self.assertEqual(len(ids), 7)
+            self.assertEqual(len(ids), 10)
             self.assertEqual(
                 get(c, "capabilities", "ticket-search")["group"], "Support sandbox"
             )

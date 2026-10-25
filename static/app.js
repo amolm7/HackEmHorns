@@ -35,6 +35,11 @@ const ICONS = {
   library: ["M4 4h5v16H4z", "M11 4h5v16h-5z", "M18 6l3 .8-3.5 13.2-3-.8z"],
   jobs: ["M4 7h16v12H4z", "M9 7V5h6v2", "M4 12h16"],
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
+  calendar: ["M4 6h16v14H4z", "M4 10h16", "M8 3v4", "M16 3v4"],
+  mail: ["M3 6h18v12H3z", "M3 7l9 6 9-6"],
+  tasks: ["M5 6l1.5 1.5L9 5", "M12 6.5h8", "M5 12l1.5 1.5L9 11", "M12 12.5h8", "M5 18l1.5 1.5L9 17", "M12 18.5h8"],
+  download: ["M12 4v11", "M7 11l5 5 5-5", "M5 20h14"],
+  spark: ["M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"],
 };
 const icon = (name, cls = "") => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${(ICONS[name] || ICONS.tool).map(d => `<path d="${d}"/>`).join("")}</svg>`;
 
@@ -155,9 +160,9 @@ const alone = a => a.level !== "intern";
 const defaultDept = () => S.me.department_ids[0] || "support";
 const defaultManager = () => isManager() ? user : (S.me.manager_id || S["dev/users"].find(u => u.roles.includes("manager") && u.department_ids.includes(defaultDept()))?.id);
 const capsOf = a => (a.bindings.length ? a.bindings.map(b => b.capability_id) : (a.required_capabilities || []).map(c => c.id)).map(id => capById(id)).filter(Boolean);
-const TOOL_VERB = { create_slideshow: "build a slideshow", create_document: "write a document", analyze_data: "analyze your data", read_url: "read a web page", search_tickets: "search support tickets", search_docs: "search help documents", create_draft: "save a reply draft" };
+const TOOL_VERB = { create_slideshow: "build a slideshow", create_document: "write a document", analyze_data: "analyze your data", read_url: "read a web page", search_tickets: "search support tickets", search_docs: "search help documents", create_draft: "save a reply draft", schedule_meeting: "schedule a meeting", draft_email: "draft an email", create_task_list: "make a task list" };
 const RISK = { read: "reads only", local_write: "saves in your workspace", always_approve: "always asks" };
-const SHORT = { "make-slideshow": "Slides", "write-document": "Documents", "analyze-data": "Data", "research-web": "Web research", "ticket-search": "Tickets", "help-docs": "Help docs", "reply-drafts": "Reply drafts" };
+const SHORT = { "make-slideshow": "Slides", "write-document": "Documents", "analyze-data": "Data", "research-web": "Web research", "ticket-search": "Tickets", "help-docs": "Help docs", "reply-drafts": "Reply drafts", "schedule-meetings": "Meetings", "draft-email": "Email", "plan-tasks": "Tasks" };
 const short = c => SHORT[c.id] || c.name;
 const opts = (list, sel) => list.map(([v, t, dis]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""} ${dis ? "disabled" : ""}>${esc(t)}</option>`).join("");
 const agentState = a => S.runs.some(r => r.agent_id === a.id && r.status === "awaiting_approval") ? "waiting" : S.runs.some(r => r.agent_id === a.id && ["queued", "running"].includes(r.status)) ? "working" : a.status !== "active" ? "setup" : "";
@@ -243,7 +248,7 @@ function sidebarActive() {
 }
 
 /* ---------- creator: drag tools onto the core, say what it should do ---------- */
-const EXAMPLES = { "make-slideshow": "Turn my meeting notes into a 5-slide deck", "write-document": "Write a one-page brief from a few bullet points", "analyze-data": "Find what stands out in a CSV I paste", "research-web": "Summarize the web pages I send it" };
+const EXAMPLES = { "make-slideshow": "Turn my meeting notes into a 5-slide deck", "write-document": "Write a one-page brief from a few bullet points", "analyze-data": "Find what stands out in a CSV I paste", "research-web": "Summarize the web pages I send it", "schedule-meetings": "Set up a 30-minute kickoff with sam@acme.com next Tuesday at 2pm", "draft-email": "Draft a polite email asking for the signed contract by Friday", "plan-tasks": "Turn my meeting notes into action items with owners" };
 function forgeScreen() {
   if (!forge.mode) forge.mode = S["model-profiles"].find(m => m.id !== "demo" && m.enabled)?.id || "demo";
   const work = S.capabilities.filter(c => (c.group || "Workspace") === "Workspace"), extra = S.capabilities.filter(c => (c.group || "Workspace") !== "Workspace");
@@ -287,6 +292,13 @@ function parseOutline(text) {
   }
   return slides;
 }
+function whenText(start, minutes) {
+  const d = new Date(start); if (isNaN(d)) return String(start || "");
+  const end = new Date(d.getTime() + (Number(minutes) || 30) * 60000);
+  const t = x => x.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `${d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} · ${t(d)} to ${t(end)}`;
+}
+const playbook = text => `<ul class="playbook">${String(text || "").split("\n").filter(Boolean).map(l => `<li>${esc(l)}</li>`).join("")}</ul>`;
 function preview(a) {
   const t = a.action.tool_id, g = a.action.arguments || {};
   let lines = [];
@@ -294,6 +306,9 @@ function preview(a) {
   else if (t === "create_document") lines = [`<b>${esc(g.title)}</b>`, ...String(g.body).split("\n").filter(Boolean).slice(0, 5).map(esc)];
   else if (t === "analyze_data") lines = [`${Math.max(0, String(g.table).trim().split("\n").length - 1)} rows of data`, ...(g.question ? [esc(g.question)] : [])];
   else if (t === "read_url") lines = [esc(g.url)];
+  else if (t === "schedule_meeting") lines = [`<b>${esc(g.title)}</b>`, esc(whenText(g.start, g.duration_minutes)), ...(g.attendees ? [esc(g.attendees)] : [])];
+  else if (t === "draft_email") lines = [`<b>${esc(g.subject)}</b>`, ...(g.to ? ["To " + esc(g.to)] : []), ...String(g.body).split("\n").filter(Boolean).slice(0, 3).map(esc)];
+  else if (t === "create_task_list") lines = [`<b>${esc(g.title)}</b>`, ...String(g.tasks).split("\n").filter(Boolean).slice(0, 5).map(x => esc(x.replace(/^[-*•]\s*/, "")))];
   else if (t === "create_draft") lines = [`Ticket ${esc(g.ticket_id)}`, esc(g.body)];
   else lines = [`Search: ${esc(g.query)}`];
   return `<ul class="plan">${lines.map(l => `<li>${l}</li>`).join("")}</ul><details class="quiet"><summary>Exact data</summary><pre>${json(g)}</pre></details>`;
@@ -326,10 +341,15 @@ function md(text) {
   flush(); return out.join("");
 }
 function slideViewer(runId, r) {
-  const n = r.slides.length, i = Math.min(ui.slide[runId] || 0, n - 1), s = r.slides[i];
-  return `<figure class="slides"><div class="stage ${i === 0 ? "cover" : ""}"><h3>${esc(i === 0 && !s.bullets.length ? r.title : s.title)}</h3>${s.bullets.length ? `<ul>${s.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}<span class="num">${i + 1} / ${n}</span>
+  const n = r.slides.length, i = Math.min(ui.slide[runId] || 0, n - 1), s = r.slides[i], layout = s.layout || (i === 0 && !s.bullets.length ? "cover" : "list");
+  const title = layout === "cover" && !s.bullets.length ? r.title : s.title;
+  const body = (s.lead ? `<p class="lead">${esc(s.lead)}</p>` : "")
+    + (s.stats?.length ? `<div class="stats">${s.stats.map(x => `<div><b>${esc(x.value)}</b><span>${esc(x.label)}</span></div>`).join("")}</div>` : "")
+    + (s.bullets.length ? `<ul>${s.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul>` : "");
+  return `<figure class="slides"><div class="stage t-${esc(r.theme || "aurora")} l-${esc(layout)}"><h3>${esc(title)}</h3>${body}<span class="num">${i + 1} / ${n}</span>
       <button class="nav prev" data-act="slide" data-run="${esc(runId)}" data-to="${i - 1}" ${i === 0 ? "disabled" : ""} aria-label="Previous slide">${icon("back")}</button><button class="nav next" data-act="slide" data-run="${esc(runId)}" data-to="${i + 1}" ${i === n - 1 ? "disabled" : ""} aria-label="Next slide">${icon("next")}</button></div>
-    <figcaption><span class="dots-nav">${r.slides.map((x, k) => `<button data-act="slide" data-run="${esc(runId)}" data-to="${k}" aria-current="${k === i}" aria-label="Slide ${k + 1}: ${esc(x.title)}"></button>`).join("")}</span><span class="note">${esc(r.title)} · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n` + r.slides.map((x, k) => `${k + 1}. ${x.title}\n${x.bullets.map(b => "  - " + b).join("\n")}`).join("\n\n"))}">Copy text</button></figcaption></figure>`;
+    <figcaption><span class="dots-nav">${r.slides.map((x, k) => `<button data-act="slide" data-run="${esc(runId)}" data-to="${k}" aria-current="${k === i}" aria-label="Slide ${k + 1}: ${esc(x.title)}"></button>`).join("")}</span><span class="note">${esc(r.title)} · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n` + r.slides.map((x, k) => `${k + 1}. ${x.title}\n${[x.lead, ...(x.stats || []).map(t => t.value + " " + t.label), ...x.bullets].filter(Boolean).map(b => "  - " + b).join("\n")}${x.notes ? "\n  Notes: " + x.notes : ""}`).join("\n\n"))}">Copy text</button></figcaption>
+    ${s.notes ? `<details class="quiet"><summary>Speaker notes</summary><p class="note">${esc(s.notes)}</p></details>` : ""}</figure>`;
 }
 function chartSvg(c) {
   const pts = c.points; if (!pts.length) return "";
@@ -341,6 +361,9 @@ function artifactView(runId, x) {
   const r = x.result || {};
   if (r.kind === "slideshow") return slideViewer(runId, r);
   if (r.kind === "document") return `<article class="doc"><h3>${esc(r.title)}</h3>${md(r.body)}<footer><span>${r.word_count} words · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n\n${r.body}`)}">Copy text</button></footer></article>`;
+  if (r.kind === "meeting") return `<article class="invite"><div class="date"><span>${esc(new Date(r.start).toLocaleDateString([], { month: "short" }))}</span><b>${esc(new Date(r.start).getDate())}</b></div><div class="what"><h3>${esc(r.title)}</h3><p class="when">${esc(whenText(r.start, r.duration_minutes))}${r.location ? " · " + esc(r.location) : ""}</p>${r.attendees.length ? `<p class="who-list">${r.attendees.map(a => `<span>${esc(a)}</span>`).join("")}</p>` : ""}${r.agenda.length ? `<ol class="agenda">${r.agenda.map(a => `<li>${esc(a)}</li>`).join("")}</ol>` : ""}<footer><span class="note">Saved, not sent</span><button class="link-btn" data-act="ics" data-title="${esc(r.title)}" data-ics="${esc(r.ics)}">${icon("download", "sm")}Calendar file</button><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n${whenText(r.start, r.duration_minutes)}${r.location ? "\n" + r.location : ""}${r.attendees.length ? "\nWith: " + r.attendees.join(", ") : ""}${r.agenda.length ? "\n\nAgenda:\n" + r.agenda.map(a => "- " + a).join("\n") : ""}`)}">Copy details</button></footer></div></article>`;
+  if (r.kind === "email") return `<article class="doc mail"><dl><dt>To</dt><dd>${r.to.length ? r.to.map(esc).join(", ") : "<span class='note'>Add a recipient</span>"}</dd><dt>Subject</dt><dd><b>${esc(r.subject)}</b></dd></dl>${md(r.body)}<footer><span>Draft saved · not sent</span><button class="link-btn" data-act="copy" data-text="${esc(`To: ${r.to.join(", ")}\nSubject: ${r.subject}\n\n${r.body}`)}">Copy email</button></footer></article>`;
+  if (r.kind === "tasks") return `<article class="doc tasks"><h3>${esc(r.title)}</h3><ul>${r.tasks.map(t => `<li><span class="box" aria-hidden="true"></span><span class="t">${esc(t.text)}</span>${t.owner ? `<span class="tag">${esc(t.owner)}</span>` : ""}${t.due ? `<span class="tag due">${esc(t.due)}</span>` : ""}</li>`).join("")}</ul><footer><span>${r.task_count} task${r.task_count === 1 ? "" : "s"} · saved in your workspace</span><button class="link-btn" data-act="copy" data-text="${esc(`${r.title}\n` + r.tasks.map(t => `- [ ] ${t.text}${t.owner ? " (" + t.owner + ")" : ""}${t.due ? " by " + t.due : ""}`).join("\n"))}">Copy list</button></footer></article>`;
   if (r.kind === "analysis") return `<div class="analysis">${r.chart ? chartSvg(r.chart) : ""}<ul class="points">${r.highlights.map(h => `<li>${esc(h)}</li>`).join("")}</ul></div>`;
   if (r.kind === "page_error") return `<p class="note">Couldn't open <a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>: ${esc(r.error)}</p>`;
   if (r.kind === "page") return `<blockquote class="source"><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || r.url)}</a><p>${esc(r.text.slice(0, 420))}${r.text.length > 420 ? "…" : ""}</p></blockquote>`;
@@ -402,7 +425,7 @@ function chatScreen(id) {
     </header>
     ${ui.rename === id ? `<form class="about row" data-form="rename" data-id="${esc(id)}"><label>Name <input name="name" value="${esc(a.name)}" maxlength="100" required></label><span class="note">Renaming resets review mode and invalidates pending tasks.</span><button class="btn small primary">Save name</button><button class="btn small" type="button" data-act="dismiss-agent-edit">Cancel</button></form>` : ""}
     ${ui.archive === id ? `<div class="about"><p>Archive ${esc(a.name)}? Unfinished tasks will stop. Its history will be kept.</p><div class="row"><button class="btn small" data-act="archive-confirm" data-id="${esc(id)}">Archive</button><button class="btn small" data-act="dismiss-agent-edit">Cancel</button></div></div>` : ""}
-    ${m ? `<section class="about"><p>${esc(a.job_description)}</p><dl><dt>Instructions</dt><dd>${esc(a.instructions)}</dd><dt>Tools</dt><dd>${caps.flatMap(c => c.tool_contracts).map(t => `${esc(TOOL_VERB[t.name] || t.name)} <span class="note">(${esc(RISK[t.risk] || t.risk)})</span>`).join("<br>")}</dd><dt>Track record</dt><dd>${m.p.approved_actions} of ${m.p.reviewed_actions} actions approved · ${m.p.successful_tasks} of ${m.p.evaluated_tasks} results marked good · ${m.p.completed_runs} of ${m.p.run_count} tasks finished</dd><dt>Team</dt><dd>${esc(deptName(a.department_id))} · managed by ${esc(userName(a.manager_id))}</dd></dl><button class="link-btn" data-act="close-about" data-id="${esc(id)}">Close</button></section>` : ""}
+    ${m ? `<section class="about"><p>${esc(a.job_description)}</p><dl><dt>Instructions</dt><dd>${esc(a.instructions)}</dd><dt>Tools</dt><dd>${caps.flatMap(c => c.tool_contracts).map(t => `${esc(TOOL_VERB[t.name] || t.name)} <span class="note">(${esc(RISK[t.risk] || t.risk)})</span>`).join("<br>")}</dd><dt>Skills</dt><dd>${caps.filter(c => c.skill).map(c => `<details class="quiet playbook-d"><summary>${esc(c.name)}</summary>${playbook(c.skill)}</details>`).join("") || "--"}</dd><dt>Track record</dt><dd>${m.p.approved_actions} of ${m.p.reviewed_actions} actions approved · ${m.p.successful_tasks} of ${m.p.evaluated_tasks} results marked good · ${m.p.completed_runs} of ${m.p.run_count} tasks finished</dd><dt>Team</dt><dd>${esc(deptName(a.department_id))} · managed by ${esc(userName(a.manager_id))}</dd></dl><button class="link-btn" data-act="close-about" data-id="${esc(id)}">Close</button></section>` : ""}
     ${a.status !== "active" ? `<div class="center-msg small"><p>${esc(a.name)} needs its own connection before the first task. Credentials never travel with a template.</p><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Connect and enable</button></div>` : ""}
     ${runs.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${alone(a) ? "It works on its own for reads and saves." : "It asks before every action."}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
     <form class="composer" data-form="run" data-id="${esc(id)}">
@@ -466,7 +489,7 @@ function leaderboardScreen() {
 function libraryScreen() {
   const usage = id => S.leaderboard.capability_usage.find(u => u.capability_id === id)?.agents || 0;
   const listings = S.marketplace.filter(l => l.kind === "agent");
-  const tools = `<ul class="lines tools">${S.capabilities.map(c => `<li><span class="lic">${icon(c.icon || "tool")}</span><span><b>${esc(c.name)}</b><span class="note">${esc(c.description)} · ${esc(c.tool_contracts.map(t => RISK[t.risk] || t.risk).join(", "))} · by ${esc(userName(c.creator_id))} · ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"}</span></span><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>Use</button></li>`).join("")}</ul>
+  const tools = `<ul class="lines tools">${S.capabilities.map(c => `<li><span class="lic">${icon(c.icon || "tool")}</span><span><b>${esc(c.name)}</b><span class="note">${esc(c.description)} · ${esc(c.tool_contracts.map(t => RISK[t.risk] || t.risk).join(", "))} · by ${esc(userName(c.creator_id))} · ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"}</span>${c.skill ? `<details class="quiet playbook-d"><summary>Playbook</summary>${playbook(c.skill)}</details>` : ""}</span><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>Use</button></li>`).join("")}</ul>
     <details class="quiet"><summary>Add a tool (admins)</summary><form class="stack" data-form="new-cap"><input name="name" required maxlength="100" placeholder="Name" aria-label="Name"><input name="description" required maxlength="500" placeholder="What it does" aria-label="What it does"><div class="checks">${Object.entries(TOOL_VERB).map(([k, v]) => `<label><input type="checkbox" name="tools" value="${esc(k)}">${esc(v[0].toUpperCase() + v.slice(1))}</label>`).join("")}</div><div><button class="btn small primary" ${S.me.roles.includes("admin") ? "" : "disabled"}>Add tool</button></div></form></details>`;
   const shared = listings.length ? `<ul class="lines">${listings.map(l => `<li>${orb(l.id, { size: 26 })}<span><b>${esc(l.payload.name)}</b><span class="note">${esc(l.payload.job_description)} · by ${esc(userName(l.creator_id || l.publisher_id))} · ${l.installation_count} install${l.installation_count === 1 ? "" : "s"}</span></span><form data-form="install" data-id="${esc(l.id)}"><button class="btn small" ${canHire() ? "" : "disabled"}>Install</button></form></li>`).join("")}</ul>` : `<p class="empty-line">Nothing shared yet. Open an agent's menu and choose “Share as template”.</p>`;
   return `<div class="page">
@@ -559,6 +582,7 @@ document.addEventListener("click", e => {
   if (kind === "archive-confirm") act(async () => { await api(`agents/${id}`, "DELETE"); ui.archive = null; location.hash = "#/new"; return "Agent archived. History kept."; }, b);
   if (kind === "revise") { ui.revise[id] = !ui.revise[id]; ui.stick = false; render(); ui.stick = true; $(`form[data-id="${id}"] input`)?.focus(); }
   if (kind === "slide") { ui.slide[b.dataset.run] = Math.max(0, Number(b.dataset.to)); ui.stick = false; render(); ui.stick = true; }
+  if (kind === "ics") { const url = URL.createObjectURL(new Blob([b.dataset.ics], { type: "text/calendar" })), a = document.createElement("a"); a.href = url; a.download = (b.dataset.title || "meeting").replace(/[^\w -]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() + ".ics"; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
   if (kind === "copy") navigator.clipboard?.writeText(b.dataset.text).then(() => toast("Copied."), () => toast("Couldn't copy. Select the text instead.", true));
   if (kind === "rate") act(async () => { await api(`runs/${id}/outcome`, "POST", { success: b.dataset.ok === "true", comment: b.dataset.ok === "true" ? "Manager rated the result good." : "Manager rated the result poor." }); return "Thanks. That counts toward the leaderboard."; }, b);
   if (kind === "cancel") act(async () => { await api(`runs/${id}/cancel`, "POST", {}); return null; }, b);
