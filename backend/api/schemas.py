@@ -23,6 +23,8 @@ class DepartmentCreate(Input):
 class CapabilityCreate(Input):
     name: Text
     description: Annotated[str, Field(min_length=1, max_length=1000)]
+    source: Literal["bundle", "github"] = "bundle"
+    department_id: Text | None = None
     tools: Annotated[
         list[
             Literal[
@@ -39,7 +41,16 @@ class CapabilityCreate(Input):
             ]
         ],
         Field(min_length=1, max_length=10),
-    ]
+    ] | None = None
+
+    @model_validator(mode="after")
+    def source_fields(self):
+        if self.source == "github":
+            if self.tools is not None or self.department_id is None:
+                raise ValueError("GitHub tools need a department and use the prepared connector's actions")
+        elif not self.tools:
+            raise ValueError("Choose actions for an existing tool bundle")
+        return self
 
 
 class CapabilityValidate(Input):
@@ -111,6 +122,12 @@ class RunCreate(Input):
     max_steps: Annotated[int, Field(ge=1, le=20)] = 8
     follow_up_of: Text | None = None
     conversation_id: Text | None = None
+    repository: Annotated[str, Field(min_length=1, max_length=300)] | None = None
+
+
+class GitHubConnect(Input):
+    repository: Annotated[str, Field(min_length=1, max_length=300)]
+    department_id: Text
 
 
 class ReviewDecision(Input):

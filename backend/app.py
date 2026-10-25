@@ -3,7 +3,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from .contracts import *
 from .db import *
-from . import registry, recruiter, reviews, workqueue
+from . import registry, recruiter, reviews, workqueue, integrations
+from .github import GitHubMCP
 from .runtime import Runtime, start, public_run, cancel, conversations
 from .runtime.mcp import MCP
 
@@ -64,6 +65,7 @@ class Application:
         self.config = config or {}
         self.db = Database(path)
         registry.seed(self.db, self.config.get("APPROVAL_SCOPE", "agent"))
+        self.github = GitHubMCP(self.config)
         self.mcp = MCP(self.db)
         self.runtime = Runtime(self)
         if worker:
@@ -94,6 +96,8 @@ class Application:
         parts = parsed.path.strip("/").split("/")
         query = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
         data = data or {}
+        if method == "POST" and parsed.path == "/api/integrations/github/connect":
+            return integrations.connect_github(self, user_id, data)
         with self.db.transaction(method != "GET") as c:
             actor = self.actor(c, user_id)
             require(isinstance(data, dict), "JSON body must be an object.")
@@ -104,6 +108,7 @@ class Application:
                     and parts[-1] in ["confirm", "install", "runs", "decision", "quick-create"]
                 )
                 or (len(parts) == 4 and parts[-1] in ["outcome", "capabilities", "conversations"])
+                or (parts == ["api", "capabilities"] and data.get("source") == "github")
             )
             permission_hash = digest(
                 {
@@ -166,6 +171,8 @@ class Application:
     def route(self, c, actor, method, p, q, d):
         require(p[0] == "api", "Endpoint not found.", 404, "not_found")
         path = "/".join(p[1:])
+        if method == "GET" and path == "integrations/github":
+            return integrations.github_status(c, self, actor)
         if p[1:2] == ["work-queue"]:
             return workqueue.route(c, self, actor, method, p, d)
         if method == "GET" and path == "me":
@@ -230,6 +237,8 @@ class Application:
             if method == "GET":
                 return registry.list_catalog(c, actor)
             if method == "POST":
+                if d.get("source") == "github":
+                    return integrations.publish_github(c, self, actor, d)
                 return registry.register(c, actor, d)
         if len(p) >= 3 and p[1] == "capabilities":
             if len(p) == 4 and p[3] == "validate" and method == "POST":

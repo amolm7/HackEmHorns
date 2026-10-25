@@ -40,7 +40,7 @@ Sandbox connection `support-local` permits Support only. Creating a new departme
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/capabilities` | Company catalog and server-controlled risk/schema metadata |
-| POST | `/capabilities` | Admin; register a curated recipe using supported sandbox tools |
+| POST | `/capabilities` | Manager/admin; register a curated recipe using supported sandbox tools |
 | POST | `/capabilities/{id}/validate` | Admin/manager/builder; test the authorized local binding |
 
 Seed capability IDs: `ticket-search`, `help-docs`, `reply-drafts`. Tool IDs: `search_tickets` (read), `search_docs` (read), `create_draft` (always approve). `create_draft` saves a local draft and never sends it.
@@ -54,6 +54,16 @@ Register example:
 ```
 
 No arbitrary endpoint/code registration. Risk is taken from the trusted implementation, not request fields.
+
+### GitHub connection (pre-registered adapter)
+
+- `GET /integrations/github`: authenticated status with `configured`, `connected`, enabled `department_ids`, `capability_id`, and `read_only`. Never returns credentials.
+- `POST /integrations/github/connect`: admin only; body `{"repository":"owner/repo","department_id":"support"}`. Uses server-side `GITHUB_PERSONAL_ACCESS_TOKEN`, discovers GitHub MCP read tools and reads the repository root before saving anything. Creates or updates the organization's prepared connection only; it never publishes a Library tool. Repeated preparation keeps one connection. The setup repository is a test target, not a fixed scope for future tasks.
+- `POST /capabilities`: a manager or admin publishes a named GitHub tool with `{"name":"Repository Reader","description":"Explain the code and issues","source":"github","department_id":"support"}` and an `Idempotency-Key`. Requires an already-tested connection for that department; uses the registered read actions automatically. The description is stored in the skill playbook and supplied to agents. A retry with the same key returns the same tool; a new creation can produce another named tool. Existing workspace bundles retain their `tools` list and default `source=bundle`.
+- `POST /agents/{id}/runs`: accepts optional `repository` (owner/repo or an HTTPS github.com repository URL). Required for agents with GitHub reading, unless continuing a conversation with an existing repository. Such agents require a live model. Changing repositories inside an existing conversation returns 409 `repository_changed`; start a new conversation instead.
+- Tools: `github_read_file` takes `path`; `github_list_issues` takes `state` (`OPEN` or `CLOSED`). The backend supplies the user-selected repository; the model cannot substitute a repository in tool arguments. Read results include `source: github_mcp`, `repository`, source URL, text, truncation flag, and scope.
+
+GitHub reading binds to its own connection; artifact capabilities bind separately to local workspace connections. The existing capability-validation, department checks, policy checks, audits and runtime tool allowlist still apply. The generic capability bundle endpoint cannot manufacture GitHub actions. No GitHub writes, arbitrary MCP endpoint entry, OAuth, or arbitrary code execution is exposed by this adapter.
 
 Validation request:
 

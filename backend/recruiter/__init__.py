@@ -61,6 +61,7 @@ def new_agent(c, actor, spec, status="active", creator_id=None):
 
 
 INTENTS = {
+    "github-reading": ["github", "repository", "repo issues"],
     "make-slideshow": ["slide", "deck", "presentation", "powerpoint", "pitch"],
     "write-document": ["document", "memo", "report", "brief", "proposal", "essay", "write up", "one-pager", "plan for"],
     "analyze-data": ["data", "csv", "spreadsheet", "analy", "chart", "metrics", "numbers"],
@@ -215,10 +216,13 @@ def message(c, app, actor, id, data):
         )
         provider = mode
     lower = msg.lower()
+    if "github" in lower:
+        require(any(item["id"] == "github-reading" for item in list_catalog(c, actor)),
+                "Ask an admin to add GitHub from Library before creating a GitHub agent.",
+                409, "github_not_connected")
     if mode == "demo" and any(
         w in lower
         for w in [
-            "github",
             "salesforce",
             "slack",
             "study",

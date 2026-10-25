@@ -667,7 +667,7 @@ class MCP:
                         result = {
                             "tools": [
                                 {k: v for k, v in t.items() if k != "risk"}
-                                for t in TOOLS.values()
+                                for name, t in TOOLS.items() if not name.startswith("github_")
                             ]
                         }
                     elif method == "tools/call":

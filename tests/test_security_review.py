@@ -114,7 +114,7 @@ class SecurityReviewTests(unittest.TestCase):
         self.assertEqual(self.call("GET", "recruiter/proposals"), [])
 
     def test_capability_registration_matches_ten_tool_http_contract(self):
-        names = list(TOOLS)
+        names = [name for name in TOOLS if not name.startswith("github_")]
         result = self.call("POST", "capabilities", {
             "name": "Workspace kit", "description": "Approved bundled tools", "tools": names,
         }, user="amol")

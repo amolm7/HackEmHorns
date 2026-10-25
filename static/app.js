@@ -51,7 +51,7 @@ let S = { steps: {}, conversations: {} };
 let busy = false;
 const forge0 = () => ({ caps: [], text: "", name: "", mode: null, more: false, target: "" });
 let forge = forge0();
-const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, drafts: {}, metrics: {}, revise: {}, pulse: 0, stick: true };
+const ui = { slide: {}, board: "agents", rank: "results", lib: "capabilities", fresh: null, drafts: {}, repositories: {}, newTool: {source: null, name: "", description: "", department: null}, metrics: {}, revise: {}, pulse: 0, stick: true };
 
 async function api(path, method = "GET", body) {
   const headers = authMode === "password" ? (csrfToken ? { "X-CSRF-Token": csrfToken } : {}) : { "X-Dev-User": user };
@@ -71,7 +71,7 @@ async function api(path, method = "GET", body) {
 }
 
 async function load() {
-  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "marketplace", "leaderboard", "work-queue"];
+  const paths = ["me", "dev/users", "departments", "capabilities", "model-profiles", "agents", "marketplace", "leaderboard", "work-queue", "integrations/github"];
   const vals = await Promise.all(paths.map(p => api(p)));
   S = { ...S, ...Object.fromEntries(paths.map((p, i) => [p, vals[i]])) };
   if (authMode === "password") { user = S.me.id; $("#identity").disabled = true; if (!$("#sign-out")) { const b = document.createElement("button"); b.id = "sign-out"; b.className = "btn small"; b.textContent = "Sign out"; b.setAttribute("aria-label", "Sign out"); b.addEventListener("click", async () => { await api("auth/logout", "POST", {}); location.reload(); }); $("#identity").closest("label").after(b); } }
@@ -167,11 +167,13 @@ const defaultDept = () => S.me.department_ids[0] || "support";
 const defaultManager = () => isManager() ? user : (S.me.manager_id || S["dev/users"].find(u => u.roles.includes("manager") && u.department_ids.includes(defaultDept()))?.id);
 const capsOf = a => (a.bindings.length ? a.bindings.map(b => b.capability_id) : (a.required_capabilities || []).map(c => c.id)).map(id => capById(id)).filter(Boolean);
 const TOOL_VERB = { create_slideshow: "build a slideshow", create_document: "write a document", analyze_data: "analyze your data", read_url: "read a web page", search_tickets: "search support tickets", search_docs: "search help documents", create_draft: "save a reply draft", schedule_meeting: "schedule a meeting", draft_email: "draft an email", create_task_list: "make a task list" };
+Object.assign(TOOL_VERB, { github_read_file: "read repository files", github_list_issues: "read repository issues" });
 const RISK_ACTION = { read: "reads only", local_write: "saves in your workspace", always_approve: "always asks" };
 const RISK_AGENT = { read: "reads only", local_write: "saves in your workspace", always_approve: "saves a draft, never sends" };
 const RISK = new Proxy({}, { get: (_, k) => (perAction() ? RISK_ACTION : RISK_AGENT)[k] });
 const SHORT = { "make-slideshow": "Slides", "write-document": "Documents", "analyze-data": "Data", "research-web": "Web research", "ticket-search": "Tickets", "help-docs": "Help docs", "reply-drafts": "Reply drafts", "schedule-meetings": "Meetings", "draft-email": "Email", "plan-tasks": "Tasks" };
 const short = c => SHORT[c.id] || c.name;
+const usesGitHub = a => capsOf(a).some(c => c.tools?.some(t => t.startsWith("github_")));
 const opts = (list, sel) => list.map(([v, t, dis]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""} ${dis ? "disabled" : ""}>${esc(t)}</option>`).join("");
 const agentState = a => S.runs.some(r => r.agent_id === a.id && r.status === "awaiting_approval") ? "waiting" : S.runs.some(r => r.agent_id === a.id && ["queued", "running"].includes(r.status)) ? "working" : a.status !== "active" ? "setup" : "";
 
@@ -304,7 +306,7 @@ const ROLES = [
 const roleChips = picked => { const ids = picked.map(c => c.id), fits = r => r.caps.some(c => ids.includes(c)); return [...ROLES.filter(fits), ...ROLES.filter(r => !fits(r))].slice(0, 4); };
 function forgeScreen() {
   if (!forge.mode) forge.mode = S["model-profiles"].find(m => m.id !== "demo" && m.enabled)?.id || "demo";
-  const work = S.capabilities.filter(c => (c.group || "Workspace") === "Workspace"), extra = S.capabilities.filter(c => (c.group || "Workspace") !== "Workspace");
+  const work = S.capabilities.filter(c => (c.group || "Workspace") !== "Support sandbox"), extra = S.capabilities.filter(c => c.group === "Support sandbox");
   const picked = forge.caps.map(capById).filter(Boolean), target = forge.target && agentById(forge.target);
   const tool = c => `<button type="button" class="tool ${forge.caps.includes(c.id) ? "used" : ""}" draggable="true" data-act="tool" data-id="${esc(c.id)}" aria-pressed="${forge.caps.includes(c.id)}" title="${esc(c.description)}">${icon(c.icon || "tool")}<span>${esc(short(c))}</span></button>`;
   const roles = roleChips(picked);
@@ -419,6 +421,7 @@ function artifactView(runId, x) {
   if (r.kind === "analysis") return `<div class="analysis">${r.chart ? chartSvg(r.chart) : ""}<ul class="points">${r.highlights.map(h => `<li>${esc(h)}</li>`).join("")}</ul></div>`;
   if (r.kind === "page_error") return `<p class="note">Couldn't open <a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>: ${esc(r.error)}</p>`;
   if (r.kind === "page") return `<blockquote class="source"><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || r.url)}</a><p>${esc(r.text.slice(0, 420))}${r.text.length > 420 ? "…" : ""}</p></blockquote>`;
+  if (r.source === "github_mcp") return `<details class="source"><summary>Read from ${esc(r.repository)}${r.truncated ? " · truncated" : ""}</summary><p class="note">${esc(r.scope)}</p><pre>${esc(r.text)}</pre></details>`;
   if (r.draft_id) return `<blockquote class="source"><b>Reply draft for ticket ${esc(r.ticket_id)} · saved, not sent</b><p>${esc(r.body)}</p></blockquote>`;
   if (r.tickets) return `<blockquote class="source"><b>Sample tickets</b>${r.tickets.map(t => `<p>${esc(t.id)} · ${esc(t.subject)}</p>`).join("")}</blockquote>`;
   if (r.documents) return `<blockquote class="source"><b>Sample help documents</b>${r.documents.map(d => `<p>${esc(d.title)}</p>`).join("")}</blockquote>`;
@@ -477,6 +480,7 @@ function chatScreen(id) {
     ${a.status !== "active" ? `<div class="center-msg small"><p>${esc(a.name)} needs its own connection before the first task. Credentials never travel with a template.</p><button class="btn primary" data-act="activate" data-id="${esc(id)}" ${manages ? "" : "disabled"}>Connect and enable</button></div>` : ""}
     ${runs.length ? `<ol class="thread">${thread}</ol>` : `<div class="hello">${orb(a.id, { size: 84, level: a.level, cls: ui.fresh === a.id ? "ignite" : "" })}<h2 class="display small">${words("What should " + a.name + " do?")}</h2><p class="note">${perAction() ? (alone(a) ? "It works on its own for reads and saves." : "It asks before every action.") : `It can ${esc(abilities(a).join(", "))}, and nothing else.`}${usable === "demo" ? " Demo model: fixed templates." : ""}</p></div>`}
     <form class="composer" data-form="run" data-id="${esc(id)}">
+      ${usesGitHub(a) ? `<label class="repository-field">GitHub repository <input name="repository" data-draft="repository" data-id="${esc(id)}" value="${esc(ui.repositories[id] ?? runs.at(-1)?.repository ?? "")}" placeholder="https://github.com/owner/repository" maxlength="300" required><span class="note">Choose any repository this connection can access. Start a new conversation to switch.</span></label>` : ""}
       ${!runs.length && ex.length ? `<div class="ideas">${ex.slice(0, 3).map(t => `<button type="button" class="idea" data-act="example" data-id="${esc(id)}" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
       <div class="box">
         <label class="sr-only" for="task-${esc(id)}">Message ${esc(a.name)}</label>
@@ -538,14 +542,22 @@ function leaderboardScreen() {
 function libraryScreen() {
   const usage = id => S.leaderboard.capability_usage.find(u => u.capability_id === id)?.agents || 0;
   const listings = S.marketplace.filter(l => l.kind === "agent");
-  const tools = `<ul class="lines tools">${S.capabilities.map(c => `<li><span class="lic">${icon(c.icon || "tool")}</span><span><b>${esc(c.name)}</b><span class="note">${esc(c.description)} · ${esc(c.tool_contracts.map(t => RISK[t.risk] || t.risk).join(", "))} · by ${esc(userName(c.creator_id))} · ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"}</span>${c.skill ? `<details class="quiet playbook-d"><summary>Playbook</summary>${playbook(c.skill)}</details>` : ""}</span><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>Use</button></li>`).join("")}</ul>
-    <details class="quiet"><summary>Add a tool (admins)</summary><form class="stack" data-form="new-cap"><input name="name" required maxlength="100" placeholder="Name" aria-label="Name"><input name="description" required maxlength="500" placeholder="What it does" aria-label="What it does"><div class="checks">${Object.entries(TOOL_VERB).map(([k, v]) => `<label><input type="checkbox" name="tools" value="${esc(k)}">${esc(v[0].toUpperCase() + v.slice(1))}</label>`).join("")}</div><div><button class="btn small primary" ${S.me.roles.includes("admin") ? "" : "disabled"}>Add tool</button></div></form></details>`;
+  const github = S["integrations/github"] || {};
+  const source = ui.newTool.source || (github.connected ? "github" : "bundle");
+  const add = `<details class="quiet add-library-tool"><summary>Add a tool</summary><form class="stack" data-form="new-cap">
+    ${isManager() ? "" : `<p class="note">You can explore this form. Sign in with a manager or admin account to add tools to the Library.</p>`}
+    <label>Name <input name="name" data-draft="new-tool-name" value="${esc(ui.newTool.name)}" required maxlength="100" placeholder="Repository Reader"></label>
+    <label>What should it do? <textarea name="description" data-draft="new-tool-description" required maxlength="1000" rows="2" placeholder="Read a repository and explain its purpose, code and open issues.">${esc(ui.newTool.description)}</textarea></label>
+    <label>Use <select name="source" data-draft="new-tool-source">${opts([["github", github.connected ? "GitHub · connected" : "GitHub · connector not prepared", !github.connected], ["bundle", "Existing workspace tools"]], source)}</select></label>
+    ${source === "github" ? `<label>Department <select name="department_id" data-draft="new-tool-department">${opts(S.departments.filter(d => github.department_ids?.includes(d.id)).map(d => [d.id,d.name]), ui.newTool.department || defaultDept())}</select></label><p class="note">Reads files and issues. Choose the repository when assigning a task.</p>` : `<div class="checks">${Object.entries(TOOL_VERB).filter(([k]) => !k.startsWith("github_")).map(([k,v]) => `<label><input type="checkbox" name="tools" value="${esc(k)}">${esc(v[0].toUpperCase()+v.slice(1))}</label>`).join("")}</div>`}
+    <div><button class="btn small primary" ${isManager() ? "" : "disabled"}>Add tool</button></div></form></details>`;
+  const tools = `<ul class="lines tools">${S.capabilities.map(c => `<li><span class="lic">${icon(c.icon || "tool")}</span><span><b>${esc(c.name)}</b><span class="note">${esc(c.description)} · ${esc(c.tool_contracts.map(t => RISK[t.risk] || t.risk).join(", "))} · by ${esc(userName(c.creator_id))} · ${usage(c.id)} agent${usage(c.id) === 1 ? "" : "s"}</span>${c.skill ? `<details class="quiet playbook-d"><summary>Playbook</summary>${playbook(c.skill)}</details>` : ""}</span><button class="btn small" data-act="use-cap" data-id="${esc(c.id)}" ${canHire() ? "" : "disabled"}>Use</button></li>`).join("")}</ul>`;
   const shared = listings.length ? `<ul class="lines">${listings.map(l => `<li>${orb(l.id, { size: 26 })}<span><b>${esc(l.payload.name)}</b><span class="note">${esc(l.payload.job_description)} · by ${esc(userName(l.creator_id || l.publisher_id))} · ${l.installation_count} install${l.installation_count === 1 ? "" : "s"}</span></span><form data-form="install" data-id="${esc(l.id)}"><button class="btn small" ${canHire() ? "" : "disabled"}>Install</button></form></li>`).join("")}</ul>` : `<p class="empty-line">Nothing shared yet. Open an agent's menu and choose “Share as template”.</p>`;
   return `<div class="page">
     <h1 class="display">${words("Library")}</h1>
     <p class="lede">Tools your company set up once, and agents your team shared.</p>
     <div class="tabs-line"><button data-act="lib" data-tab="capabilities" aria-pressed="${ui.lib === "capabilities"}">Tools</button><button data-act="lib" data-tab="agents" aria-pressed="${ui.lib === "agents"}">Shared agents</button></div>
-    ${ui.lib === "capabilities" ? tools : shared}</div>`;
+    ${ui.lib === "capabilities" ? tools + add : shared}</div>`;
 }
 
 /* ---------- team jobs ---------- */
@@ -592,6 +604,7 @@ async function createAgent() {
     forge = forge0(); location.hash = "#/agent/" + a.id;
     return perAction() ? `${a.name} is ready. New tools ask before acting.` : `${a.name} can now use its new tools.`;
   }
+  if (forge.caps.some(id => capById(id)?.tools?.some(t => t.startsWith("github_"))) && forge.mode === "demo") throw Error("Choose Meta or Gemini for GitHub reading. Demo mode does not read GitHub.");
   const body = { model_profile_id: forge.mode, department_id: defaultDept(), manager_id: defaultManager() };
   if (forge.caps.length) body.capability_ids = forge.caps;
   if (forge.text.trim()) body.description = forge.text.trim();
@@ -693,6 +706,7 @@ document.addEventListener("submit", e => {
     act(async () => {
       // The agent's model was fixed when it was created; the server uses it for every task.
       const body = { task: d.task, max_steps: 8 };
+      if (usesGitHub(a)) body.repository = d.repository;
       const conv = activeConversation(a.id);
       if (conv) body.conversation_id = conv.id;
       if (follow) body.follow_up_of = follow.id;
@@ -704,7 +718,14 @@ document.addEventListener("submit", e => {
   if (kind === "rename") act(async () => { const a = agentById(f.dataset.id); await api(`agents/${a.id}`, "PATCH", { name: d.name, expected_spec_version: a.spec_version }); ui.rename = null; return "Name saved."; }, sub);
   if (kind === "decide") act(async () => { await api(`approvals/${f.dataset.id}/decision`, "POST", d); delete ui.revise[f.dataset.id]; return { approve: null, reject: "Okay. That action won't run.", request_revision: "Sent back. It will propose something new." }[d.decision]; }, sub);
   if (kind === "install") act(async () => { const r = await api(`marketplace/${f.dataset.id}/install`, "POST", { department_id: defaultDept(), manager_id: defaultManager() }); location.hash = "#/agent/" + r.resource.id; return "Installed. Connect it before its first task."; }, sub);
-  if (kind === "new-cap") act(async () => { const tools = new FormData(f).getAll("tools"); if (!tools.length) throw Error("Choose at least one action."); await api("capabilities", "POST", { name: d.name, description: d.description, tools }); return "Tool added to the Library."; }, sub);
+  if (kind === "new-cap") act(async () => {
+    const body = {name: d.name, description: d.description, source: d.source};
+    if (d.source === "github") body.department_id = d.department_id;
+    else { body.tools = new FormData(f).getAll("tools"); if (!body.tools.length) throw Error("Choose at least one action."); }
+    await api("capabilities", "POST", body);
+    ui.newTool = {source: null, name: "", description: "", department: null};
+    return "Tool added to Library. Use it alongside Slides or Documents.";
+  }, sub);
   if (kind === "create-job") act(async () => { await api("work-queue", "POST", d); return "Job added. Assign an agent to begin."; }, sub);
   if (kind === "assign-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/assign`, "POST", d); return perAction() ? "Assigned. It will ask before acting." : "Assigned. It's working on it."; }, sub);
   if (kind === "review-ticket") act(async () => { await api(`work-queue/${encodeURIComponent(f.dataset.id)}/review`, "POST", { success: d.success === "true", comment: d.comment }); return "Review saved."; }, sub);
@@ -717,6 +738,15 @@ document.addEventListener("input", e => {
   if (t === "forge-text") { forge.text = e.target.value; grow(e.target); }
   if (t === "forge-name") { forge.name = e.target.value; const go = $("[data-act='create']"); if (go && !forge.target) { go.disabled = !(canHire() && forge.name.trim()); go.title = forge.name.trim() ? "" : "Name your agent first"; } }
   if (t === "run") { ui.drafts[e.target.dataset.id] = e.target.value; grow(e.target); }
+  if (t === "repository") ui.repositories[e.target.dataset.id] = e.target.value;
+  if (t === "new-tool-name") ui.newTool.name = e.target.value;
+  if (t === "new-tool-description") ui.newTool.description = e.target.value;
+});
+document.addEventListener("change", e => {
+  const kind = e.target.dataset?.draft;
+  if (kind === "forge-mode") { forge.mode = e.target.value; render(); }
+  if (kind === "new-tool-source") { ui.newTool.source = e.target.value; render(); $(".add-library-tool")?.setAttribute("open", ""); }
+  if (kind === "new-tool-department") ui.newTool.department = e.target.value;
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.matches?.("textarea[data-draft='run']")) { e.preventDefault(); e.target.form.requestSubmit(); }

@@ -1,5 +1,6 @@
 from ..contracts import *
 from ..db import get, put, all_rows, audit
+from ..github import GITHUB_TOOLS
 
 TOOLS = {
     "search_tickets": {
@@ -128,6 +129,8 @@ for _tool_name, _tool in TOOLS.items():
         if _field in _schema["required"]:
             _property["minLength"] = 1
 
+
+TOOLS.update(GITHUB_TOOLS)
 
 # Skills: short playbooks that say how to do each kind of work well. Live models receive the playbooks
 # for the tools they hold; the app shows them in the Library and on each agent. They are guidance
@@ -526,7 +529,7 @@ def seed(db, approval_scope="agent"):
 
 
 def public_connection(conn):
-    return {k: v for k, v in conn.items() if k != "secret_ref"}
+    return {k: v for k, v in conn.items() if k not in {"secret_ref", "credential_version"}}
 
 
 def resolve(c, actor, connection_id, department_id):
@@ -554,7 +557,26 @@ def validate(c, app, actor, cap_id, data):
     cap = capability(c, actor, cap_id)
     conn_id = string(data.get("connection_id"), "connection_id", 100)
     dept = string(data.get("department_id"), "department_id", 100)
-    resolve(c, actor, conn_id, dept)
+    conn = resolve(c, actor, conn_id, dept)
+    if any(t in GITHUB_TOOLS for t in cap["tools"]):
+        require(all(t in GITHUB_TOOLS for t in cap["tools"]) and conn["kind"] == "github_mcp",
+                "GitHub reading needs its own GitHub connection.", 409, "connection_denied")
+        require(conn.get("credential_version") == digest(app.github.token),
+                "GitHub configuration changed. Reconnect it from Library.", 409, "connection_denied")
+        require(bool(conn.get("validated_at")), "Test the GitHub connection from Library first.", 409, "validation_required")
+        result = put(c, "validations", {
+            "id": uid(), "org_id": actor["org_id"], "capability_id": cap_id,
+            "capability_version": cap["version"], "connection_id": conn_id,
+            "department_id": dept, "passed": True,
+            "checks": [{"name": "Binding matches the admin-tested GitHub connection", "passed": True}],
+            "evidence": {"tested_repository": conn.get("tested_repository"),
+                         "connection_tested_at": conn["validated_at"], "read_only": True},
+            "test_scope": "Stored connection test with unchanged credentials and approved read schemas. Repository access is checked on every live read. No new network probe or GitHub write during binding.",
+            "created_at": now(),
+        })
+        audit(c, actor, "capability.validated", cap_id, {"validation_id": result["id"], "passed": True})
+        return result
+    require(conn["kind"] == "bundled_mcp", "This capability needs a local workspace connection.", 409, "connection_denied")
     discovered = app.mcp.discover()
     found = {x["name"]: x for x in discovered}
     checks = [
@@ -655,12 +677,12 @@ def list_catalog(c, actor):
 
 
 def register(c, actor, data):
-    roles(actor, "admin")
+    roles(actor, "admin", "manager")
     names = data.get("tools")
     require(
         isinstance(names, list)
         and 0 < len(names) <= 10
-        and all(t in TOOLS for t in names),
+        and all(t in TOOLS and t not in GITHUB_TOOLS for t in names),
         "Only tools from the bundled catalog can be registered.",
     )
     support_only = all(t in SUPPORT_TOOLS for t in names)
