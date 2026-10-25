@@ -146,6 +146,8 @@ def conversation(c, actor):
 
 def proposal_access(actor, p):
     in_org(actor, p)
+    if p.get("spec", {}).get("department_id"):
+        department_access(actor, p["spec"]["department_id"])
     require(
         "admin" in actor["roles"]
         or actor["id"] == p["actor_id"]
@@ -356,7 +358,9 @@ def confirm(c, actor, id, data):
     spec = p["spec"]
     manage(actor, {"org_id": p["org_id"], "manager_id": spec.get("manager_id")})
     if p["status"] == "confirmed":
-        return get(c, "agents", p["resource_id"])
+        agent = get(c, "agents", p["resource_id"])
+        manage(actor, agent)
+        return agent
     require(not p["missing_fields"], "Complete missing fields first.", 409)
     check_manager(c, actor, spec["department_id"], spec["manager_id"])
     check_bindings(c, actor, spec["department_id"], spec["bindings"])

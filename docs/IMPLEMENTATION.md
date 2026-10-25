@@ -1,14 +1,14 @@
 # Implementation status and engineering notes
 
-All four backend work areas from the team plan have been implemented as modules behind FastAPI/Uvicorn. `backend/api/` contains explicit routers, strict Pydantic request contracts, common request dependencies, error handlers, transport middleware, and lifespan resource management. `/docs` and `/openapi.json` expose the actual route contract. The frontend is a replaceable HTTP workbench, not final product design.
+All four backend work areas from the team plan have been implemented as modules behind FastAPI/Uvicorn. `backend/api/` contains explicit routers, strict Pydantic request contracts, common request dependencies, error handlers, transport middleware, and lifespan resource management. `/docs` and `/openapi.json` expose the actual route contract. The frontend uses the same HTTP contracts as the API documentation.
 
 ## Registry / marketplace
 
-SQLite WAL-backed persistence; seeded roles, departments and three capabilities; backend-only connection resolver; real MCP discovery/fixture validation; custom curated recipes; internal publishing and installs; portable payloads exclude connections and earned trust. No global marketplace or external OAuth/vault system is claimed.
+SQLite WAL-backed persistence; seeded roles, departments and ten capabilities; backend-only connection resolver; real MCP discovery/fixture validation; custom curated recipes; internal publishing and installs; portable payloads exclude connections and earned trust. No global marketplace or external OAuth/vault system is claimed.
 
 ## Runtime / trust
 
-A single recoverable background dispatcher polls persisted queued/running runs. Agent spec versions, tool allowlists, department access, active connections, current org policy, maximum calls, and exact action hashes are enforced before dispatch. Intern tools require approval. Associate reads may proceed; all non-read tools still require approval in this MVP. There are no public bypass/resume endpoints.
+A single recoverable background dispatcher polls persisted queued/running runs. Agent spec versions, tool allowlists, department access, active connections, current org policy, maximum calls, and exact action hashes are enforced before dispatch. The default `agent` policy confirms a scoped agent once. The optional `action` policy pauses Intern tool calls for review; Associates may read and save local artifacts, while restricted tools require review. Organization-wide `require_all_approvals` overrides both modes. There are no public bypass/resume endpoints.
 
 A pending action and approval are committed before execution. A decision marks a run queued in the same database transaction; a process crash cannot lose that continuation event. On startup, queued work resumes; approval waits remain persisted. Completed actions are not repeated. An action interrupted in `executing` may be retried with its original durable action ID **only because the bundled local draft tool implements a database deduplication ledger**. Reads are retryable. This is not an exactly-once guarantee for arbitrary external APIs; new integrations must supply provider idempotency or an explicit uncertain/manual-reconciliation state.
 
@@ -30,11 +30,11 @@ The local deterministic setup path is a development adapter, clearly labeled. Me
 
 ## Persistence and scale
 
-Data is stored as versioned JSON records in named SQLite tables. This keeps the hackathon contract flexible; IDs and idempotency records are indexed by primary key. Lists are filtered by org/actor in service code. For production scale, migrate to typed relational tables, targeted SQL queries, schema migrations, real authentication, a deployment-grade secret manager, and an external work queue. Model setup calls currently hold a write transaction; this serializes concurrent setup mutations and should be separated into propose/validate/commit jobs before scaling.
+Data is stored as versioned JSON records in named SQLite tables. This keeps the hackathon contract flexible; IDs and idempotency records are indexed by primary key. Lists are filtered by org/actor in service code. For production scale, migrate to typed relational tables, targeted SQL queries, schema migrations, enterprise identity federation, a deployment-grade secret manager, and an external work queue. Model setup calls currently hold a write transaction; this serializes concurrent setup mutations and should be separated into propose/validate/commit jobs before scaling.
 
 ## Frontend handoff
 
-`static/index.html`, `static/app.js`, and `static/style.css` are deliberately basic. The future frontend should consume `docs/API.md` directly. Approval, risk, role, and state logic belongs on the backend. Retain the explicit demo identity/mode labels if using sandbox data; replace identity selection with real sessions before deploying.
+`static/index.html`, `static/app.js`, and `static/style.css` provide the visual workspace using `docs/API.md` contracts. Approval, risk, role, and state logic belongs on the backend. Retain the explicit demo identity/mode labels if using sandbox data; use password sessions for deployment; production mode refuses development identity selection.
 
 ## Verification
 
@@ -42,7 +42,7 @@ Activate `.venv` after installing `requirements-dev.txt`. Run `python -m unittes
 
 ## FastAPI migration
 
-The public standard-library request handler was replaced with FastAPI and Uvicorn. The private bundled MCP server remains a separate authenticated loopback protocol implementation. Domain services, SQLite data, and durable run/approval states remain compatible. Request validation now returns 422 for malformed bodies, unknown fields, wrong types and absent required replay headers. Error details omit input values. Documentation uses a nonce-protected Swagger initializer and a narrowly scoped CDN policy; the main workbench retains its self-only CSP. Production authentication and multi-process workers remain outside the MVP.
+The public standard-library request handler was replaced with FastAPI and Uvicorn. The private bundled MCP server remains a separate authenticated loopback protocol implementation. Domain services, SQLite data, and durable run/approval states remain compatible. Request validation now returns 422 for malformed bodies, unknown fields, wrong types and absent required replay headers. Error details omit input values. Documentation uses a nonce-protected Swagger initializer and a narrowly scoped CDN policy; the main workbench retains its self-only CSP. Password authentication is implemented; enterprise SSO and multi-process workers remain outside the MVP.
 
 ## Live provider verification
 

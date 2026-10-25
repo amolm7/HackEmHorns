@@ -6,10 +6,18 @@ from ..quality import check as check_quality
 
 def inbox(c, actor, status=None):
     roles(actor, "admin", "manager", "auditor")
+    accessible = set()
+    for agent in all_rows(c, "agents"):
+        try:
+            visible_agent(actor, agent)
+            accessible.add(agent["id"])
+        except Error:
+            continue
     return [
         a
         for a in all_rows(c, "approvals")
         if a["org_id"] == actor["org_id"]
+        and a["agent_id"] in accessible
         and (
             "admin" in actor["roles"]
             or "auditor" in actor["roles"]

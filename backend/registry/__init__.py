@@ -659,7 +659,7 @@ def register(c, actor, data):
     names = data.get("tools")
     require(
         isinstance(names, list)
-        and 0 < len(names) <= 3
+        and 0 < len(names) <= 10
         and all(t in TOOLS for t in names),
         "Only tools from the bundled catalog can be registered.",
     )

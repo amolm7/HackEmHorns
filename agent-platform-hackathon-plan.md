@@ -6,6 +6,8 @@
 
 The four backend work areas are now implemented in `backend/registry`, `backend/runtime`, `backend/reviews`, and `backend/recruiter`, with explicit FastAPI routers and Pydantic request validation, SQLite persistence, Meta/Gemini adapters, and a deliberately basic frontend. See `README.md`, `docs/API.md`, and `docs/IMPLEMENTATION.md` for the actual contract and limits. The local sandbox workflow is verified; live provider verification requires a configured key. The sections below retain the agreed product plan and ownership breakdown.
 
+> Current approval behavior: the shipped default is manager approval of the scoped agent once. Per-action Intern/Associate review remains available with `approval_scope=action`. The trust table below records the original design, not the default policy. See [security and track review](docs/SECURITY-REVIEW.md).
+
 ## 1. Concept
 
 An enterprise agent platform that combines employee-style onboarding with a company marketplace of reusable capabilities. Users describe a job to a Recruiter helper. It proposes an agent with a department, manager, instructions, tools, and explicit permissions. A human reviews the job card and hires the agent as an Intern. The agent starts with supervised work and can be manually promoted as its manager reviews real results.

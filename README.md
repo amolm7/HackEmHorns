@@ -1,6 +1,6 @@
 # Hire an Agent
 
-Backend-first HackTX prototype: **describe a job, hire an Intern, review real tool actions, promote scoped reads, and reuse company capabilities.** The frontend is intentionally a plain workbench so a separate design skill can replace it later.
+HackTX agent platform: **describe a job, reuse approved capabilities, create a scoped agent, and review its results.** Includes a visual workspace, company marketplace, durable execution history, and optional per-action review.
 
 ## Run
 
@@ -86,24 +86,24 @@ Run commands inside the activated `.venv`. Tests use real loopback MCP and FastA
 | Shaun | `backend/reviews/`: manager Inbox decisions, revisions, levels, performance, outcomes, audit/leaderboard reads |
 | Pavan | `backend/recruiter/`, `backend/app.py`, `server.py`: conversations, review cards, hires, specs/versions, routing and integration |
 
-FastAPI routers and Pydantic request models live in `backend/api/`. ASGI lifespan starts and closes the worker/MCP resources. Shared domain validation and authorization helpers live in `backend/contracts.py`. The basic UI talks exclusively to documented HTTP endpoints. Replace `static/` later without moving business logic into the browser.
+FastAPI routers and Pydantic request models live in `backend/api/`. ASGI lifespan starts and closes the worker/MCP resources. Shared domain validation and authorization helpers live in `backend/contracts.py`. The UI talks exclusively to documented HTTP endpoints. Business authorization stays on the server.
 
 See **docs/API.md** for all endpoints and payloads, and **docs/IMPLEMENTATION.md** for design decisions, recovery guarantees, and scope.
 
 ## Scope
 
-Implemented: one seeded company, local actor roles, two departments, three curated capabilities, Intern/Associate, human approval with durable pause/resume, revisions, manual promotions/demotions, model function calls, company marketplace, portable installs, local validations, spec versions, task outcomes, traces, audit events, and measured reuse.
+Implemented: one seeded company, password sessions or explicit development identities, two departments, ten curated capabilities, configurable agent/action approval, Intern/Associate controls, durable pause/resume, revisions, model function calls, company marketplace, portable installs, local validations, spec versions, task outcomes, traces, audit events, and measured reuse.
 
-Not implemented: production login/OAuth/vault integrations, external customer systems, arbitrary MCP discovery, public/global marketplace, security certification/scanning, Senior summaries, Lead delegation, Ollama, streaming UI, dollar-cost accounting, or distributed workers. Connection resolution is backend-only for the bundled sandbox; no third-party account is connected. Fictional tickets/docs are explicitly labeled. Capability write validation checks discovery plus a read fixture; it does not silently perform an unreviewed write or certify general behavior.
+Not implemented: enterprise SSO/OAuth/vault integrations, external customer systems, arbitrary MCP discovery, public/global marketplace, security certification, Senior summaries, Lead delegation, Ollama, dollar-cost accounting, or distributed workers. Password sessions, authenticated activity streaming and CI dependency scanning are implemented. Connection resolution is backend-only for the bundled sandbox; no third-party account is connected. Fictional tickets/docs are explicitly labeled. Capability write validation checks discovery plus a read fixture; it does not silently perform an unreviewed write or certify general behavior.
 
 References: [Meta tool calling](https://dev.meta.ai/docs/tool-calling), [Meta structured output](https://dev.meta.ai/docs/structured-output), [Meta quickstart](https://dev.meta.ai/docs/quickstart), [Gemini generateContent](https://ai.google.dev/api/generate-content), [MCP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports).
 
 ## Workspace capabilities and design (latest)
 
-- Preloaded capabilities: **Make a slideshow**, **Write a document**, **Analyze data**, **Research & summarize**, **Schedule meetings**, **Draft emails**, **Plan tasks** (plus the labeled support sandbox). Saving tools use risk `local_write`: agents set to "Runs alone" may read and save locally; anything else (e.g. reply drafts) always asks.
-- Agent creation: choose a model, pick capabilities and/or describe the job, review, create. Agents start as "Asks first"; one switch moves them to "Runs alone". Follow-up questions continue a live conversation.
+- Preloaded capabilities: **Make a slideshow**, **Write a document**, **Analyze data**, **Research & summarize**, **Schedule meetings**, **Draft emails**, **Plan tasks** (plus the labeled support sandbox). Saving tools use risk `local_write`. Under per-action policy, agents set to "Runs alone" may read and save locally; restricted drafts still ask. The default agent-level policy approves the scoped agent once.
+- Agent creation: choose a model, pick capabilities and/or describe the job, review, create. Managers confirm the scoped agent; optional per-action policy exposes "Asks first" and "Runs alone" controls. Follow-up questions continue a live conversation.
 - Leaderboard: result quality (thumbs up/down on results), approval rate, capability usage and creator usage.
-- `read_url` fetches only public http(s) pages (private/loopback addresses blocked, redirects re-checked). DNS-rebinding is not fully mitigated; do not expose this demo publicly.
+- `read_url` fetches only public http(s) pages (private/loopback addresses blocked, redirects re-checked). Connections pin validated public IPs while preserving TLS hostname checks. Public deployment still needs the controls in [operations](docs/OPERATIONS.md).
 - Design: "Mission control" (dark glass, 3D globe backdrop). See `docs/DESIGN.md`.
 
 
@@ -114,7 +114,7 @@ Open **Team work** (the default home page). Choose **Product launch**, **Growth 
 1. Load a fictional scenario. Repeated loads do not duplicate it.
 2. Hire the suggested specialist or reuse an agent with the required capabilities. Company permissions and connection validation still apply.
 3. Assign an owner and select Demo or an enabled live model. Demo uses explicitly labeled templates; live models produce original tool arguments. Analysis jobs in demo mode require CSV input.
-4. Review restricted actions in Inbox. An Intern asks before every action; an Associate can read and save locally within existing permissions. Nothing is sent, published or purchased.
+4. Review results in Inbox and Team work. With per-action approval enabled, Interns ask before every action; Associates can read and save locally within existing permissions. The default policy approves the agent once. Nothing is sent, published or purchased.
 5. Review the deliverables together in Team work. Product launch requires analysis, a brief, and a deck before it can be accepted. Outcome review is separate from tool approval.
 6. Mark work accepted or needing correction with notes. Corrected, failed, or cancelled work can be reassigned; the new attempt receives correction notes and prior runs remain in the agent audit trail.
 
@@ -127,7 +127,7 @@ The redesigned UI uses atomic quick creation, durable task conversations, authen
 Every capability carries a short **skill**: a playbook for doing that kind of work well (for example, slide titles that state a takeaway, at most four short bullets, real numbers only; meeting titles that name the outcome, with a timed agenda). Live models receive the playbooks for the tools they hold, appended to the agent's instructions at run time, so updates apply to existing agents. The Library and each agent's About panel show them. Playbooks are guidance only: permissions, approvals and validation are unchanged.
 
 - Slides accept `> ` lead statements, `stat: 38% | label` headline numbers, `notes: ` speaker notes, and a `theme` (aurora, paper, sunrise, mono). The viewer picks a layout (cover, statement, stats, list) per slide.
-- `schedule_meeting` saves an invite with attendees, time, agenda and a downloadable `.ics` file. It cannot see calendars and sends nothing. `draft_email` saves an unsent draft and always asks for approval. `create_task_list` saves tasks with optional owner and due date.
+- `schedule_meeting` saves an invite with attendees, time, agenda and a downloadable `.ics` file. It cannot see calendars and sends nothing. `draft_email` saves an unsent draft and asks for approval under per-action policy. `create_task_list` saves tasks with optional owner and due date.
 - Demo mode reads obvious details from the request (emails, weekday or date, time, duration) and labels everything as a template.
 
 ### Approvals, scope and models
@@ -136,3 +136,5 @@ Every capability carries a short **skill**: a playbook for doing that kind of wo
 - **Scope.** An agent can only call the tools it was approved for (enforced on the server), and live models are told to decline work outside those skills instead of answering in plain text.
 - **Model fixed at creation.** Runs always use the agent's model; requesting a different one returns 409 `model_fixed`. The chat shows the model but has no picker.
 - **Deleting agents.** The creator, the assigned manager or an admin can delete an agent from its `…` menu. Unfinished tasks stop; history stays in the audit trail (`DELETE /api/agents/{id}`, a soft archive).
+
+See [the security and track review](docs/SECURITY-REVIEW.md) for verified fixes, checks, and remaining production gaps.

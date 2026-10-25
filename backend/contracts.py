@@ -70,6 +70,9 @@ def visible_agent(actor, agent):
 
 def manage(actor, agent):
     in_org(actor, agent)
+    require(actor.get("active", True), "This account is disabled.", 403, "account_disabled")
+    if agent.get("department_id"):
+        department_access(actor, agent["department_id"])
     require(
         "admin" in actor["roles"]
         or ("manager" in actor["roles"] and actor["id"] == agent["manager_id"]),

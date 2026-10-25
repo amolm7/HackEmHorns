@@ -75,7 +75,7 @@ def parse_outline(text):
 
 def clean_attendees(text):
     people = []
-    for part in re.split(r"[,;\n]", text or ""):
+    for part in re.split(r"[,;\r\n]", text or ""):
         part = part.strip()
         if part and part.lower() not in [p.lower() for p in people]:
             people.append(part[:120])
@@ -83,12 +83,16 @@ def clean_attendees(text):
 
 
 def ics_escape(value):
-    return str(value).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    value = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", value)
+    return value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
 def meeting_result(args):
     try:
-        start = datetime.fromisoformat(string(args.get("start"), "start", 40).strip().replace(" ", "T", 1))
+        start_text = string(args.get("start"), "start", 40).replace(" ", "T", 1)
+        require("T" in start_text, "Start must include a date and time.", 422, "invalid_request")
+        start = datetime.fromisoformat(start_text)
     except ValueError:
         raise Error("Start must be a date and time such as 2026-11-03T14:00.", 422, "invalid_request")
     raw = str(args.get("duration_minutes") or "30").strip()
@@ -101,11 +105,16 @@ def meeting_result(args):
     location = str(args.get("location") or "").strip()[:500]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     uid_value = uid()
+    # Preserve explicit offsets in the artifact, and serialize them as UTC in the invite.
+    def calendar_time(value):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        return value.strftime("%Y%m%dT%H%M%S")
+
     lines = [
         "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//ORBIT//Meeting draft//EN", "METHOD:PUBLISH", "BEGIN:VEVENT",
         f"UID:{uid_value}@orbit.local", f"DTSTAMP:{stamp}",
-        # Floating local time: the invite carries no time zone because the user did not give one.
-        f"DTSTART:{start.strftime('%Y%m%dT%H%M%S')}", f"DTEND:{end.strftime('%Y%m%dT%H%M%S')}",
+        f"DTSTART:{calendar_time(start)}", f"DTEND:{calendar_time(end)}",
         f"SUMMARY:{ics_escape(title)}",
     ]
     if agenda:
@@ -113,7 +122,7 @@ def meeting_result(args):
     if location:
         lines.append(f"LOCATION:{ics_escape(location)}")
     for person in attendees:
-        if "@" in person and " " not in person:
+        if re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+", person):
             lines.append(f"ATTENDEE;RSVP=TRUE:mailto:{person}")
     lines += ["END:VEVENT", "END:VCALENDAR"]
     return {
@@ -341,13 +350,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def public_address(url):
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        raise Error("Invalid link or port.")
     require(parts.scheme in {"http", "https"}, "Only http and https links can be read.")
     require(
         bool(parts.hostname) and not parts.username and not parts.password,
         "Invalid link.",
     )
-    require(parts.port in {None, 80, 443}, "Only standard web ports can be read.")
+    require(port in {None, 80, 443}, "Only standard web ports can be read.")
     try:
         addresses = {
             info[4][0]

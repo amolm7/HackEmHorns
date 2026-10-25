@@ -7,7 +7,7 @@ import urllib.request
 from ..contracts import Error, require
 
 
-def provider_error(provider, exc):
+def provider_error(provider, exc, secrets=()):
     status = getattr(exc, "code", None)
     retryable = status in {408, 429, 500, 502, 503, 504} if status else True
     retry_after = 0
@@ -18,13 +18,17 @@ def provider_error(provider, exc):
     detail = ""
     if isinstance(exc, urllib.error.HTTPError):
         # Providers explain validation failures in the response body. Keep a short, single-line
-        # excerpt so a 400 is diagnosable; request headers (and the key) are never included.
+        # excerpt so a 400 is diagnosable. The response body is untrusted too.
         try:
             body = json.loads(exc.read(4000).decode("utf-8", "replace"))
             error = body[0]["error"] if isinstance(body, list) else body.get("error", body)
             detail = str(error.get("message", "") if isinstance(error, dict) else error)
         except Exception:
             detail = ""
+        for secret in secrets:
+            if secret:
+                detail = detail.replace(secret, "[redacted]")
+        detail = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[redacted]", detail)
         detail = re.sub(r"\s+", " ", detail).strip()[:240]
         exc.close()
     message = (
@@ -97,7 +101,7 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
         ) as r:
             out = json.load(r)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-        raise provider_error("Gemini", exc)
+        raise provider_error("Gemini", exc, (key,))
     candidates = out.get("candidates", [])
     require(
         bool(candidates and candidates[0].get("content", {}).get("parts")),
@@ -195,7 +199,7 @@ def meta_generate(config, contents, instruction, tools=None, structured=False):
         ) as response:
             data = json.load(response)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-        raise provider_error("Meta Model API", exc)
+        raise provider_error("Meta Model API", exc, (key,))
     choices = data.get("choices", [])
     require(bool(choices), "Meta returned no usable response.", 502, "provider_error")
     native = choices[0].get("message", {})

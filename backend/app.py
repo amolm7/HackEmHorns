@@ -8,6 +8,57 @@ from .runtime import Runtime, start, public_run, cancel, conversations
 from .runtime.mcp import MCP
 
 
+def replay_access(c, parts, result):
+    """Track resource authority, independently of mutable execution/status fields.
+
+    A cached response must not bypass a department transfer or manager reassignment.
+    Follow references so a run/approval also depends on its current agent's scope.
+    """
+    tables = (
+        "agents", "runs", "approvals", "proposals", "work_items", "agent_conversations",
+    )
+    authority_fields = (
+        "org_id", "department_id", "manager_id", "assigned_manager_id",
+        "creator_id", "actor_id", "user_id", "agent_id", "target_agent_id",
+        "run_id", "resource_id",
+    )
+    pending = set(parts[2:])
+
+    def references(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (key == "id" or key.endswith("_id")) and isinstance(item, str):
+                    pending.add(item)
+                elif isinstance(item, (dict, list)):
+                    references(item)
+        elif isinstance(value, list):
+            for item in value:
+                references(item)
+
+    references(result)
+    seen, scopes = set(), {}
+    while pending:
+        ident = pending.pop()
+        if ident in seen:
+            continue
+        seen.add(ident)
+        for table in tables:
+            row = c.execute(f"SELECT body FROM {table} WHERE id=?", (ident,)).fetchone()
+            if row is None:
+                continue
+            obj = json.loads(row["body"])
+            scopes[table + ":" + ident] = {key: obj.get(key) for key in authority_fields}
+            if table == "proposals":
+                scopes[table + ":" + ident]["spec_scope"] = {
+                    key: obj.get("spec", {}).get(key)
+                    for key in ("department_id", "manager_id", "agent_id")
+                }
+            for key in ("agent_id", "target_agent_id", "run_id", "resource_id"):
+                if isinstance(obj.get(key), str):
+                    pending.add(obj[key])
+    return digest(scopes)
+
+
 class Application:
     def __init__(self, path, config=None, worker=False):
         self.config = config or {}
@@ -88,6 +139,12 @@ class Application:
                         409,
                         "replay_access_changed",
                     )
+                    require(
+                        old.get("resource_access_hash") == replay_access(c, parts, old["result"]),
+                        "Resource access changed since this request. Refresh before continuing.",
+                        409,
+                        "replay_access_changed",
+                    )
                     return old["result"]
             result = self.route(c, actor, method, parts, query, data)
             if idem_id:
@@ -99,6 +156,7 @@ class Application:
                         "org_id": actor["org_id"],
                         "payload_hash": payload_hash,
                         "permission_hash": permission_hash,
+                        "resource_access_hash": replay_access(c, parts, result),
                         "result": result,
                         "created_at": now(),
                     },
