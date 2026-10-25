@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import ssl
 import certifi
@@ -212,6 +213,11 @@ def meta_generate(config, contents, instruction, tools=None, structured=False):
         ) as response:
             data = json.load(response)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        # Operators comparing a host with a laptop need the exact model string and key length, never the key.
+        logging.getLogger("backend.model").warning(
+            "Meta request failed: model=%r key_length=%d error=%s", payload["model"], len(key), type(exc).__name__
+            + (f" {exc.code}" if isinstance(exc, urllib.error.HTTPError) else ""),
+        )
         raise provider_error("Meta Model API", exc, (key,))
     choices = data.get("choices", [])
     require(bool(choices), "Meta returned no usable response.", 502, "provider_error")
