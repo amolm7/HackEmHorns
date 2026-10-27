@@ -83,7 +83,10 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
         409,
         "model_not_configured",
     )
-    require(bool(re.fullmatch(r"[a-zA-Z0-9._-]+", model)), "Invalid model setting.")
+    # When the preferred model is overloaded, try the listed fallbacks before failing the person's click.
+    models = [model] + [m.strip() for m in str(config.get("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash-lite")).split(",") if m.strip() and m.strip() != model]
+    for name in models:
+        require(bool(re.fullmatch(r"[a-zA-Z0-9._-]+", name)), "Invalid model setting.")
     payload = {
         "contents": contents,
         "systemInstruction": {"parts": [{"text": instruction}]},
@@ -104,18 +107,24 @@ def gemini_generate(config, contents, instruction, tools=None, structured=False)
         ]
     if structured:
         payload["generationConfig"]["responseMimeType"] = "application/json"
-    req = urllib.request.Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "x-goog-api-key": key},
-    )
-    try:
-        with urllib.request.urlopen(
-            req, timeout=model_timeout(config), context=ssl.create_default_context(cafile=certifi.where())
-        ) as r:
-            out = json.load(r)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-        raise provider_error("Gemini", exc, (key,))
+    body = json.dumps(payload).encode()
+    for index, name in enumerate(models):
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent",
+            data=body,
+            headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        )
+        try:
+            with urllib.request.urlopen(
+                req, timeout=model_timeout(config), context=ssl.create_default_context(cafile=certifi.where())
+            ) as r:
+                out = json.load(r)
+            break
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+            error = provider_error("Gemini", exc, (key,))
+            logging.getLogger("backend.model").warning("Gemini request failed: model=%r error=%s", name, error)
+            if index == len(models) - 1 or not error.details.get("retryable"):
+                raise error
     candidates = out.get("candidates", [])
     require(
         bool(candidates and candidates[0].get("content", {}).get("parts")),
@@ -215,10 +224,17 @@ def meta_generate(config, contents, instruction, tools=None, structured=False):
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
         # Operators comparing a host with a laptop need the exact model string and key length, never the key.
         logging.getLogger("backend.model").warning(
-            "Meta request failed: model=%r key_length=%d error=%s", payload["model"], len(key), type(exc).__name__
+            "Meta request failed: model=%r key_length=%d error=%s request_id=%s", payload["model"], len(key), type(exc).__name__
             + (f" {exc.code}" if isinstance(exc, urllib.error.HTTPError) else ""),
+            (exc.headers.get("x-request-id", "") if isinstance(exc, urllib.error.HTTPError) and exc.headers else ""),
         )
-        raise provider_error("Meta Model API", exc, (key,))
+        error = provider_error("Meta Model API", exc, (key,))
+        # Meta sometimes answers a valid model with a 404 "model not found" and then accepts the same request a
+        # moment later. Treat that one case as temporary so callers retry instead of failing the person's click.
+        detail = str(error).partition(": ")[2].lower()
+        if getattr(exc, "code", None) == 404 and "model" in detail and "not found" in detail:
+            error.details["retryable"] = True
+        raise error
     choices = data.get("choices", [])
     require(bool(choices), "Meta returned no usable response.", 502, "provider_error")
     native = choices[0].get("message", {})

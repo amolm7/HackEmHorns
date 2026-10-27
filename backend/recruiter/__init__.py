@@ -1,4 +1,5 @@
 import threading
+import time
 import json
 from ..contracts import *
 from ..db import *
@@ -161,6 +162,7 @@ def proposal_access(actor, p):
 
 
 SETUP_TIMEOUT = 45
+RETRY_PAUSES = (1.5, 3.0, 6.0)  # seconds to wait before each further model attempt
 
 
 def setup_request(c, actor, messages, previous, data):
@@ -202,7 +204,15 @@ def setup_generate(app, request, mode):
 
     def call():
         try:
-            box["out"] = model.generate(app.config, contents, instruction, structured=True, provider=mode)
+            for attempt in range(len(RETRY_PAUSES) + 1):
+                try:
+                    box["out"] = model.generate(app.config, contents, instruction, structured=True, provider=mode)
+                    return
+                except Error as exc:
+                    # A provider's temporary failure should not cost the person a click; the time limit above still applies.
+                    if not exc.details.get("retryable") or attempt == len(RETRY_PAUSES):
+                        raise
+                    time.sleep(RETRY_PAUSES[attempt])
         except BaseException as exc:  # re-raised on the calling thread
             box["err"] = exc
 
